@@ -1,8 +1,15 @@
-// Caches the latest GPS fix on an interval so detections can log location without blocking inference.
-// Lower GPS_REFRESH_MS for denser spatial data; costs battery.
+// Caches the latest GPS fix from a continuous watch so detections can log location without blocking inference.
+// A watch lets iOS settle on a satellite fix; repeated getCurrentPosition calls tend to get quick, coarse Wi-Fi answers.
+const WATCH_OPTIONS = {
+  enableHighAccuracy: true,
+  maximumAge: 0,
+  timeout: 15000,
+};
+
+// Fallback only: polled while the watch is reporting errors, and stopped as soon as it delivers again.
 export const GPS_REFRESH_MS = 3000;
 
-const GEO_OPTIONS = {
+const POLL_OPTIONS = {
   enableHighAccuracy: true,
   timeout: 8000,
   maximumAge: 2000,
@@ -10,9 +17,15 @@ const GEO_OPTIONS = {
 
 export function createGpsTracker(onFix) {
   let cachedFix = null;
-  let intervalId = null;
+  let active = false;
+  let watchId = null;
+  let fallbackId = null;
 
   function applyPosition(position) {
+    // A poll that was already in flight when tracking stopped must not update the cache.
+    if (!active) {
+      return;
+    }
     cachedFix = {
       lat: position.coords.latitude,
       lon: position.coords.longitude,
@@ -22,23 +35,58 @@ export function createGpsTracker(onFix) {
     onFix?.(cachedFix);
   }
 
-  function refresh() {
-    if (!navigator.geolocation) {
+  function poll() {
+    navigator.geolocation.getCurrentPosition(applyPosition, () => {}, POLL_OPTIONS);
+  }
+
+  function startFallback() {
+    if (fallbackId !== null) {
       return;
     }
-    navigator.geolocation.getCurrentPosition(applyPosition, () => {}, GEO_OPTIONS);
+    poll();
+    fallbackId = window.setInterval(poll, GPS_REFRESH_MS);
+  }
+
+  function stopFallback() {
+    if (fallbackId !== null) {
+      window.clearInterval(fallbackId);
+      fallbackId = null;
+    }
+  }
+
+  function handleWatchPosition(position) {
+    stopFallback();
+    applyPosition(position);
+  }
+
+  // The watch keeps running after a timeout or unavailable error, so polling only fills the gap.
+  // Polling cannot help when permission is denied.
+  function handleWatchError(error) {
+    if (error.code === error.PERMISSION_DENIED) {
+      return;
+    }
+    startFallback();
   }
 
   return {
     start() {
-      refresh();
-      intervalId = window.setInterval(refresh, GPS_REFRESH_MS);
+      if (!navigator.geolocation || active) {
+        return;
+      }
+      active = true;
+      watchId = navigator.geolocation.watchPosition(
+        handleWatchPosition,
+        handleWatchError,
+        WATCH_OPTIONS,
+      );
     },
     stop() {
-      if (intervalId !== null) {
-        window.clearInterval(intervalId);
-        intervalId = null;
+      active = false;
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
       }
+      stopFallback();
     },
     getFix() {
       return cachedFix;
