@@ -8,19 +8,23 @@
 </head>
 <body>
   <header class="top-nav">
-    <h1 class="top-nav__title">Live detection tool</h1>
-    <nav class="top-nav__actions" aria-label="Live detection controls">
-      <button type="button" id="btn-live-toggle" class="btn btn--primary" aria-pressed="false">Start Live Detection</button>
-      <button type="button" id="btn-record" class="btn btn--secondary" aria-pressed="false">Start Recording</button>
-      <div class="export-menu">
+    <div class="top-nav__start">
+      <h1 class="top-nav__title">Live detection tool</h1>
+      <div class="segmented" role="group" aria-label="Mode">
+        <button type="button" class="segmented__option" data-app-mode="live" aria-pressed="true">Live</button>
+        <button type="button" class="segmented__option" data-app-mode="review" aria-pressed="false">Review</button>
+      </div>
+    </div>
+    <nav class="top-nav__actions" aria-label="Controls">
+      <button type="button" id="btn-live-toggle" class="btn btn--primary" aria-pressed="false" data-show-in="live">Start Live Detection</button>
+      <button type="button" id="btn-record" class="btn btn--secondary" aria-pressed="false" data-show-in="live">Start Recording</button>
+      <div class="export-menu hidden" data-show-in="review">
         <button type="button" id="btn-export" class="btn btn--secondary export-menu__trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="export-menu">Export</button>
         <div id="export-menu" class="export-menu__list" role="menu" hidden>
           <button type="button" class="export-menu__item" role="menuitem" data-export="csv">CSV</button>
           <button type="button" class="export-menu__item" role="menuitem" data-export="json">JSON</button>
         </div>
       </div>
-      <button type="button" id="btn-summary" class="btn btn--secondary" aria-pressed="false">Summary</button>
-      <button type="button" id="btn-map" class="btn btn--secondary" aria-pressed="false">Map</button>
     </nav>
   </header>
 
@@ -95,64 +99,65 @@
         </div>
       </div>
 
-      <section id="session-summary" class="session-summary hidden" aria-labelledby="session-summary-title">
-        <div class="session-summary__header">
-          <h2 id="session-summary-title" class="session-summary__title">Session summary</h2>
-          <button type="button" id="btn-summary-close" class="btn btn--secondary">Back to live</button>
-        </div>
-
-        <p id="summary-empty" class="session-summary__empty hidden">No data yet — record a session first</p>
-
-        <div id="summary-content" class="session-summary__content hidden">
-          <div class="summary-metrics">
-            <section class="live-card summary-metric">
-              <h2 class="live-card__label">Detections</h2>
-              <p class="summary-metric__value" data-summary="detections">0</p>
-            </section>
-            <section class="live-card summary-metric">
-              <h2 class="live-card__label">Frames</h2>
-              <p class="summary-metric__value" data-summary="frames">0</p>
-            </section>
-            <section class="live-card summary-metric">
-              <h2 class="live-card__label">Avg confidence</h2>
-              <p class="summary-metric__value" data-summary="confidence">0.00</p>
-            </section>
-            <section class="live-card summary-metric">
-              <h2 class="live-card__label">Duration</h2>
-              <p class="summary-metric__value" data-summary="duration">00:00</p>
-            </section>
+      <section id="review-panel" class="review-panel hidden" aria-label="Review">
+        <p id="review-empty" class="review-panel__empty hidden">No recordings yet — switch to Live and press Start Recording.</p>
+        <div id="review-body" class="review-panel__body hidden">
+          <div id="review-tabs" class="segmented review-tabs" role="tablist" aria-label="Review views">
+            <button type="button" id="tab-map" class="segmented__option" role="tab" data-review-tab="map" aria-selected="true" aria-controls="session-map">Map</button>
+            <button type="button" id="tab-summary" class="segmented__option" role="tab" data-review-tab="summary" aria-selected="false" aria-controls="session-summary" tabindex="-1">Summary</button>
           </div>
 
-          <section class="live-card">
-            <h2 class="live-card__label">Summary</h2>
-            <p id="summary-text" class="summary-text"></p>
-          </section>
-
-          <section class="live-card">
-            <h2 class="live-card__label">Top labels</h2>
-            <div class="summary-chart">
-              <canvas id="summary-labels-chart" role="img" aria-label="Most frequent detection labels"></canvas>
+          <section id="session-map" class="session-map" role="tabpanel" aria-labelledby="tab-map">
+            <div id="map-mode" class="map-mode hidden" role="group" aria-label="Map view">
+              <button type="button" class="map-mode__option" data-map-mode="viewer" aria-pressed="true">Where I was</button>
+              <button type="button" class="map-mode__option" data-map-mode="objects" aria-pressed="false">Where objects were</button>
             </div>
-            <p id="summary-chart-note" class="summary-chart-note hidden"></p>
+
+            <p id="map-empty" class="session-map__empty hidden">No location data yet — record a session with GPS first</p>
+            <p id="map-error" class="session-map__empty hidden">The map could not be loaded.</p>
+            <p id="map-objects-empty" class="session-map__note hidden">No object positions were estimated in this session. Estimates need GPS, a compass reading within ±30°, and a label with a known size that isn't cut off by the frame edge.</p>
+            <div id="map-canvas" class="session-map__canvas hidden" role="region" aria-label="Map of the walked path"></div>
+            <div id="map-legend" class="map-legend hidden" role="group" aria-label="Detection label colors"></div>
+          </section>
+
+          <section id="session-summary" class="session-summary hidden" role="tabpanel" aria-labelledby="tab-summary">
+            <p id="summary-empty" class="session-summary__empty hidden">No data yet — record a session first</p>
+
+            <div id="summary-content" class="session-summary__content hidden">
+              <div class="summary-metrics">
+                <section class="live-card summary-metric">
+                  <h2 class="live-card__label">Detections</h2>
+                  <p class="summary-metric__value" data-summary="detections">0</p>
+                </section>
+                <section class="live-card summary-metric">
+                  <h2 class="live-card__label">Frames</h2>
+                  <p class="summary-metric__value" data-summary="frames">0</p>
+                </section>
+                <section class="live-card summary-metric">
+                  <h2 class="live-card__label">Avg confidence</h2>
+                  <p class="summary-metric__value" data-summary="confidence">0.00</p>
+                </section>
+                <section class="live-card summary-metric">
+                  <h2 class="live-card__label">Duration</h2>
+                  <p class="summary-metric__value" data-summary="duration">00:00</p>
+                </section>
+              </div>
+
+              <section class="live-card">
+                <h2 class="live-card__label">Summary</h2>
+                <p id="summary-text" class="summary-text"></p>
+              </section>
+
+              <section class="live-card">
+                <h2 class="live-card__label">Top labels</h2>
+                <div class="summary-chart">
+                  <canvas id="summary-labels-chart" role="img" aria-label="Most frequent detection labels"></canvas>
+                </div>
+                <p id="summary-chart-note" class="summary-chart-note hidden"></p>
+              </section>
+            </div>
           </section>
         </div>
-      </section>
-
-      <section id="session-map" class="session-map hidden" aria-labelledby="session-map-title">
-        <div class="session-map__header">
-          <h2 id="session-map-title" class="session-map__title">Session map</h2>
-          <div id="map-mode" class="map-mode hidden" role="group" aria-label="Map view">
-            <button type="button" class="map-mode__option" data-map-mode="viewer" aria-pressed="true">Where I was</button>
-            <button type="button" class="map-mode__option" data-map-mode="objects" aria-pressed="false">Where objects were</button>
-          </div>
-          <button type="button" id="btn-map-close" class="btn btn--secondary">Back to live</button>
-        </div>
-
-        <p id="map-empty" class="session-map__empty hidden">No location data yet — record a session with GPS first</p>
-        <p id="map-error" class="session-map__empty hidden">The map could not be loaded.</p>
-        <p id="map-objects-empty" class="session-map__note hidden">No object positions were estimated in this session. Estimates need GPS, a compass reading within ±30°, and a label with a known size that isn't cut off by the frame edge.</p>
-        <div id="map-canvas" class="session-map__canvas hidden" role="region" aria-label="Map of the walked path"></div>
-        <div id="map-legend" class="map-legend hidden" role="group" aria-label="Detection label colors"></div>
       </section>
     </main>
   </div>

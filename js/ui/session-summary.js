@@ -1,8 +1,5 @@
 // On-demand snapshot of the in-memory detection log. Does not record, detect, or export.
-import {
-  getLiveDetectionLog,
-  onLiveDetectionLogCleared,
-} from "../live/detection-log.js";
+import { getLiveDetectionLog } from "../live/detection-log.js";
 
 const CHART_SRC =
   "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js";
@@ -226,31 +223,25 @@ function renderSummary(stats) {
   }
 }
 
+// The Review panel decides when the summary is visible; this only builds, clears, and re-measures it.
 export function initSessionSummary() {
-  const button = document.getElementById("btn-summary");
   const panel = document.getElementById("session-summary");
-  const closeButton = document.getElementById("btn-summary-close");
   const empty = document.getElementById("summary-empty");
   const content = document.getElementById("summary-content");
   const chartNote = document.getElementById("summary-chart-note");
 
-  if (!button || !panel || !closeButton || !empty || !content) {
-    return;
+  if (!panel || !empty || !content) {
+    return null;
   }
 
-  function closeSummary() {
+  function close() {
     openGeneration += 1;
     destroyChart();
-    panel.classList.add("hidden");
-    button.setAttribute("aria-pressed", "false");
-    button.focus();
   }
 
-  async function openSummary() {
+  async function open() {
     const generation = ++openGeneration;
     const rows = getLiveDetectionLog().slice();
-    button.setAttribute("aria-pressed", "true");
-    panel.classList.remove("hidden");
     panel.scrollTop = 0;
 
     const hasRows = rows.length > 0;
@@ -258,7 +249,6 @@ export function initSessionSummary() {
     content.classList.toggle("hidden", !hasRows);
     if (!hasRows) {
       destroyChart();
-      closeButton.focus();
       return;
     }
 
@@ -288,19 +278,9 @@ export function initSessionSummary() {
     }
   }
 
-  button.addEventListener("click", () => {
-    const open = button.getAttribute("aria-pressed") === "true";
-    if (open) {
-      closeSummary();
-    } else {
-      openSummary();
-    }
-  });
-  closeButton.addEventListener("click", closeSummary);
-  // Redraw from the empty log so the open panel shows its empty state.
-  onLiveDetectionLogCleared(() => {
-    if (button.getAttribute("aria-pressed") === "true") {
-      openSummary();
-    }
-  });
+  function resize() {
+    chart?.resize();
+  }
+
+  return { open, close, resize };
 }

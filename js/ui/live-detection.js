@@ -219,16 +219,6 @@ export function initLiveDetectionPage() {
     }
   }
 
-  // The Map and Summary panels cover the camera, so close whichever is open.
-  function closeOverlayPanels() {
-    for (const id of ["btn-map", "btn-summary"]) {
-      const button = document.getElementById(id);
-      if (button?.getAttribute("aria-pressed") === "true") {
-        button.click();
-      }
-    }
-  }
-
   function setHeading({ main, detail }) {
     const text = `${main}\n${detail}`;
     if (text === headingText) {
@@ -442,7 +432,6 @@ export function initLiveDetectionPage() {
       return;
     }
     const compassPermission = requestCompassPermission();
-    closeOverlayPanels();
 
     liveToggle.disabled = true;
     mainStart.disabled = true;

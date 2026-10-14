@@ -1,8 +1,5 @@
 // On-demand map of the walked GPS path and detections from the in-memory detection log. Read-only.
-import {
-  getLiveDetectionLog,
-  onLiveDetectionLogCleared,
-} from "../live/detection-log.js";
+import { getLiveDetectionLog } from "../live/detection-log.js";
 
 const LEAFLET_CSS =
   "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
@@ -457,22 +454,16 @@ function drawMap(L, container, path) {
   detectionLayer = L.layerGroup().addTo(map);
 }
 
+// The Review panel decides when the map is visible; this only builds, clears, and re-measures it.
 export function initSessionMap() {
-  const button = document.getElementById("btn-map");
-  const panel = document.getElementById("session-map");
-  const closeButton = document.getElementById("btn-map-close");
   const empty = document.getElementById("map-empty");
   const errorNote = document.getElementById("map-error");
   const canvas = document.getElementById("map-canvas");
   const legend = document.getElementById("map-legend");
   const modeGroup = document.getElementById("map-mode");
   const objectsEmpty = document.getElementById("map-objects-empty");
-  const summaryButton = document.getElementById("btn-summary");
 
   if (
-    !button ||
-    !panel ||
-    !closeButton ||
     !empty ||
     !errorNote ||
     !canvas ||
@@ -480,13 +471,14 @@ export function initSessionMap() {
     !modeGroup ||
     !objectsEmpty
   ) {
-    return;
+    return null;
   }
 
   const modeButtons = [...modeGroup.querySelectorAll("[data-map-mode]")];
   let leaflet = null;
   let path = [];
   let snapshot = null;
+  let fitPending = false;
 
   function renderMode() {
     for (const option of modeButtons) {
@@ -511,37 +503,23 @@ export function initSessionMap() {
     legend.classList.add("hidden");
   }
 
-  function isOpen() {
-    return button.getAttribute("aria-pressed") === "true";
-  }
-
-  function closeMap({ restoreFocus = true } = {}) {
+  function close() {
     openGeneration += 1;
+    fitPending = false;
     destroyMap();
     clearLegend();
     modeGroup.classList.add("hidden");
     objectsEmpty.classList.add("hidden");
-    panel.classList.add("hidden");
-    button.setAttribute("aria-pressed", "false");
-    if (restoreFocus) {
-      button.focus();
-    }
   }
 
-  async function openMap() {
+  async function open() {
     const generation = ++openGeneration;
-    if (summaryButton?.getAttribute("aria-pressed") === "true") {
-      summaryButton.click();
-    }
-
     const rows = getLiveDetectionLog().slice();
     path = extractPath(rows);
     snapshot = {
       viewer: extractDetectionPoints(rows, viewerPosition),
       objects: extractDetectionPoints(rows, objectPosition),
     };
-    button.setAttribute("aria-pressed", "true");
-    panel.classList.remove("hidden");
     errorNote.classList.add("hidden");
     objectsEmpty.classList.add("hidden");
     clearLegend();
@@ -552,7 +530,6 @@ export function initSessionMap() {
     modeGroup.classList.toggle("hidden", !hasPath);
     if (!hasPath) {
       destroyMap();
-      closeButton.focus();
       return;
     }
 
@@ -563,6 +540,8 @@ export function initSessionMap() {
       }
       leaflet = L;
       drawMap(L, canvas, path);
+      // The tab may have been hidden while Leaflet loaded; fit again once it is shown.
+      fitPending = canvas.offsetWidth === 0;
       renderMode();
     } catch (error) {
       console.error("[MAP] map failed:", error);
@@ -576,6 +555,18 @@ export function initSessionMap() {
     }
   }
 
+  // Leaflet caches its size, so re-measure after the tab is shown again.
+  function resize() {
+    if (!map) {
+      return;
+    }
+    map.invalidateSize();
+    if (fitPending) {
+      fitPending = false;
+      renderMode();
+    }
+  }
+
   for (const option of modeButtons) {
     option.addEventListener("click", () => {
       if (option.dataset.mapMode === mapMode) {
@@ -586,23 +577,5 @@ export function initSessionMap() {
     });
   }
 
-  button.addEventListener("click", () => {
-    if (isOpen()) {
-      closeMap();
-    } else {
-      openMap();
-    }
-  });
-  closeButton.addEventListener("click", () => closeMap());
-  summaryButton?.addEventListener("click", () => {
-    if (isOpen()) {
-      closeMap({ restoreFocus: false });
-    }
-  });
-  // Redraw from the empty log: removes the path, rings, and dots and shows the empty state.
-  onLiveDetectionLogCleared(() => {
-    if (isOpen()) {
-      openMap();
-    }
-  });
+  return { open, close, resize };
 }
