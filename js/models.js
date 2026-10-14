@@ -1,6 +1,7 @@
 // Loads Transformers.js pipelines (object-detection or image-classification) and chooses WebGPU or WASM.
 // live-detection.js reads the resolved device/dtype via getObjectDetectorBackend().
 import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.2.1";
+import { isPhone } from "./utils/device.js";
 
 export const MODEL_OPTIONS = [
   { id: "Xenova/yolos-tiny", label: "YOLOS-tiny (detection)", task: "detection", enabled: true },
@@ -9,7 +10,10 @@ export const MODEL_OPTIONS = [
   { id: "llm:scene-description", label: "LLM — scene description (coming soon)", task: "llm", enabled: false },
 ];
 
-let MODEL_ID = "Xenova/yolos-tiny";
+// Phones start on the lighter classifier; desktop and iPad on YOLOS-tiny.
+let MODEL_ID = isPhone()
+  ? "onnx-community/mobilenetv4_conv_small.e2400_r224_in1k"
+  : "Xenova/yolos-tiny";
 const DTYPE = "auto";
 
 export function getModelId() {
@@ -30,16 +34,14 @@ export function setLiveDetectionActive(active) {
   liveDetectionActive = Boolean(active);
 }
 
-const DEFAULT_DTYPE_BY_DEVICE = {
-  webgpu: "fp16",
-  wasm: "q8",
-};
+const WASM_BACKEND = { device: "wasm", dtype: "q8" };
 
-// Use WebGPU whenever requestAdapter() returns an adapter; WASM only if GPU is missing, null, or throws.
-async function pickDevice() {
+// WebGPU whenever requestAdapter() returns an adapter; fp16 only if it supports shader-f16, else fp32.
+// WASM (q8) if GPU is missing, null, or throws.
+async function pickBackend() {
   if (!navigator.gpu) {
     console.log("[BACKEND] navigator.gpu missing → wasm");
-    return "wasm";
+    return WASM_BACKEND;
   }
 
   try {
@@ -49,39 +51,48 @@ async function pickDevice() {
         typeof adapter.requestAdapterInfo === "function"
           ? await adapter.requestAdapterInfo().catch(() => null)
           : null;
-      console.log("[BACKEND] WebGPU adapter available → webgpu", info ?? "");
-      return "webgpu";
+      const dtype = adapter.features.has("shader-f16") ? "fp16" : "fp32";
+      console.log(`[BACKEND] WebGPU adapter available → webgpu (${dtype})`, info ?? "");
+      return { device: "webgpu", dtype };
     }
 
     console.log(
       "[BACKEND] requestAdapter() returned null → wasm (no adapter)",
     );
-    return "wasm";
+    return WASM_BACKEND;
   } catch (error) {
     console.log(
       "[BACKEND] requestAdapter() threw → wasm",
       error?.message ?? error,
     );
-    return "wasm";
+    return WASM_BACKEND;
   }
 }
 
-const resolvedDevicePromise = pickDevice();
+let resolvedBackendPromise = pickBackend();
 
-// fp16 is typically faster on WebGPU; q8 is the WASM default. Set DTYPE (not "auto") to force a precision for comparison.
-function resolveDtypeForDevice(device) {
-  if (DTYPE !== "auto") {
-    return DTYPE;
-  }
-  return DEFAULT_DTYPE_BY_DEVICE[device] ?? "q8";
-}
-
+// Set DTYPE (not "auto") to force a precision for comparison.
 export async function getObjectDetectorBackend() {
-  const device = await resolvedDevicePromise;
-  return {
-    device,
-    dtype: resolveDtypeForDevice(device),
-  };
+  const backend = await resolvedBackendPromise;
+  return DTYPE === "auto" ? { ...backend } : { ...backend, dtype: DTYPE };
+}
+
+// A failed WebGPU load retries on WASM, and later loads stay on WASM.
+async function createPipeline(task, model) {
+  const { device, dtype } = await getObjectDetectorBackend();
+  console.log(`[BACKEND] device=${device} dtype=${dtype}`);
+  try {
+    return await pipeline(task, model, { device, dtype });
+  } catch (error) {
+    if (device !== "webgpu") {
+      throw error;
+    }
+    console.log("[BACKEND] webgpu load failed → wasm", error?.message ?? error);
+    resolvedBackendPromise = Promise.resolve(WASM_BACKEND);
+    const fallback = await getObjectDetectorBackend();
+    console.log(`[BACKEND] device=${fallback.device} dtype=${fallback.dtype}`);
+    return pipeline(task, model, fallback);
+  }
 }
 
 const MODEL_CONFIG = {
@@ -153,14 +164,7 @@ export async function loadModel(modelName) {
   const _tStart = performance.now();
   console.log(`[TIMING] ${modelName}: loading started (${requestedModel})`);
 
-  const device = await resolvedDevicePromise;
-  const dtype = resolveDtypeForDevice(device);
-  console.log(`[BACKEND] device=${device} dtype=${dtype}`);
-
-  const loadPromise = pipeline(config.task, requestedModel, {
-    device,
-    dtype,
-  })
+  const loadPromise = createPipeline(config.task, requestedModel)
     .then((instance) => {
       if (config.model !== requestedModel) {
         return models[modelName];

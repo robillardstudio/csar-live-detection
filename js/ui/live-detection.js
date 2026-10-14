@@ -39,7 +39,12 @@ import {
   renderBoundingBoxesOnContainer,
 } from "../analysis/objects.js";
 import { classifyImageFromSource } from "../analysis/classify.js";
-import { getSettings, initModelPicker } from "./sidebar.js";
+import {
+  getSettings,
+  initModelPicker,
+  setModelPickersDisabled,
+  syncModelPickers,
+} from "./sidebar.js";
 import { getSelectedRecordingId } from "./app-mode.js";
 
 const ROLLING_WINDOW = 30;
@@ -448,6 +453,7 @@ export function initLiveDetectionPage() {
 
     liveToggle.disabled = true;
     mainStart.disabled = true;
+    setModelPickersDisabled(true);
     try {
       stream = await requestCameraStream();
       setLiveDetectionActive(true);
@@ -492,6 +498,7 @@ export function initLiveDetectionPage() {
     } finally {
       liveToggle.disabled = false;
       mainStart.disabled = false;
+      setModelPickersDisabled(false);
     }
   }
 
@@ -613,12 +620,9 @@ export function initLiveDetectionPage() {
   window.addEventListener("pagehide", stopLiveDetection);
 
   async function handleModelSelect(modelId) {
-    const select = document.getElementById("model-picker");
     switchingModel = true;
     setModelLoading(modelId);
-    if (select) {
-      select.disabled = true;
-    }
+    setModelPickersDisabled(true);
     try {
       while (busy) {
         await new Promise((resolve) => requestAnimationFrame(resolve));
@@ -631,15 +635,11 @@ export function initLiveDetectionPage() {
     } catch (error) {
       console.error("[LIVE] model switch failed:", error);
       showCameraFeedback("Could not load that model");
-      if (select) {
-        select.value = getModelId();
-      }
+      syncModelPickers();
     } finally {
       switchingModel = false;
       setModelLoading(null);
-      if (select) {
-        select.disabled = false;
-      }
+      setModelPickersDisabled(false);
     }
   }
 

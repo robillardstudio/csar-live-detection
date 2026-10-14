@@ -38,7 +38,7 @@
       <div class="live-sidebar-stack">
         <section class="live-card">
           <h2 class="live-card__label">Model</h2>
-          <select id="model-picker" class="model-picker" aria-label="Model"></select>
+          <select id="model-picker" class="model-picker" aria-label="Model" data-model-picker></select>
         </section>
 
         <section class="live-card">
@@ -98,6 +98,10 @@
         <div id="live-idle" class="live-stage__idle">
           <p class="live-stage__idle-title">Start live detection</p>
           <p class="live-stage__idle-copy">Camera feed and object boxes will appear here.</p>
+          <div class="live-stage__idle-picker">
+            <label class="live-card__label" for="model-picker-start">Model</label>
+            <select id="model-picker-start" class="model-picker" data-model-picker></select>
+          </div>
           <button type="button" id="btn-live-start-main" class="btn btn--primary">Start live detection</button>
         </div>
         <div id="model-loading" class="live-stage__loading" hidden>

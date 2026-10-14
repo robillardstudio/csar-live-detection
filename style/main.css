@@ -504,6 +504,12 @@ button {
   color: var(--color-text-subtle);
 }
 
+.live-stage__idle-picker {
+  width: min(280px, 100%);
+  margin-bottom: 6px;
+  text-align: left;
+}
+
 .live-stage__loading {
   position: absolute;
   inset: 0;

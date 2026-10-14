@@ -1,5 +1,6 @@
 // App entry: boots the live-detection page and preloads the object detector in the background.
 import { loadModel } from "./models.js";
+import { isCoarsePointer } from "./utils/device.js";
 import { initLiveDetectionPage } from "./ui/live-detection.js";
 import { initSessionSummary } from "./ui/session-summary.js";
 import { initSessionMap } from "./ui/session-map.js";
@@ -15,7 +16,10 @@ document.addEventListener("DOMContentLoaded", () => {
     initAppMode({ map, summary });
   }
 
-  loadModel("objectDetector").catch(() => {
-    // Preload runs in background; errors surface when live detection starts.
-  });
+  // Phones and tablets load the model on Start; a background GPU load on page open can crash mobile Chrome.
+  if (!isCoarsePointer()) {
+    loadModel("objectDetector").catch(() => {
+      // Preload runs in background; errors surface when live detection starts.
+    });
+  }
 });

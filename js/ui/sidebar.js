@@ -13,30 +13,45 @@ export function getSettings() {
   };
 }
 
+// The sidebar and the start screen each have a picker; both show the same model.
+function getModelPickers() {
+  return [...document.querySelectorAll("[data-model-picker]")];
+}
+
+export function syncModelPickers(modelId = getModelId()) {
+  for (const select of getModelPickers()) {
+    select.value = modelId;
+  }
+}
+
+export function setModelPickersDisabled(disabled) {
+  for (const select of getModelPickers()) {
+    select.disabled = disabled;
+  }
+}
+
 export function initModelPicker(onSelect) {
-  const select = document.getElementById("model-picker");
-  if (!select) {
-    return null;
-  }
-
-  select.replaceChildren();
-  for (const option of MODEL_OPTIONS) {
-    const el = document.createElement("option");
-    el.value = option.id;
-    el.textContent = option.label;
-    el.disabled = !option.enabled;
-    select.appendChild(el);
-  }
-  select.value = getModelId();
-
-  select.addEventListener("change", () => {
-    const option = MODEL_OPTIONS.find((item) => item.id === select.value);
-    if (!option?.enabled) {
-      select.value = getModelId();
-      return;
+  const selects = getModelPickers();
+  for (const select of selects) {
+    select.replaceChildren();
+    for (const option of MODEL_OPTIONS) {
+      const el = document.createElement("option");
+      el.value = option.id;
+      el.textContent = option.label;
+      el.disabled = !option.enabled;
+      select.appendChild(el);
     }
-    onSelect?.(select.value);
-  });
 
-  return select;
+    select.addEventListener("change", () => {
+      const option = MODEL_OPTIONS.find((item) => item.id === select.value);
+      if (!option?.enabled) {
+        syncModelPickers();
+        return;
+      }
+      syncModelPickers(select.value);
+      onSelect?.(select.value);
+    });
+  }
+  syncModelPickers();
+  return selects;
 }
