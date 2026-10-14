@@ -122,6 +122,7 @@ Target schema (this is the agreed target — build to it exactly):
 ```js
 {
   timestamp,      // Date.now() — ms epoch, when the inference completed
+  recording_id,   // 1, 2, 3… — which Start → Stop Recording this row belongs to; restarts at 1 after Clear recordings
   lat,            // number, 8 decimal places (match predecessor precision)
   lon,            // number, 8 decimal places
   gps_accuracy,   // meters, from position.coords.accuracy  (NEW — important, see note)
@@ -143,6 +144,7 @@ Notes:
 - **Transformers.js detection output shape** is an array of `{ score, label, box: { xmin, ymin, xmax, ymax } }`. Map `score → confidence`, `box → bbox`. The box is already in pixel coordinates relative to the input image, so also compute `bbox_norm` by dividing by `frame_w`/`frame_h`.
 - Store **both** pixel and normalized bbox. Pixel is what the model gives; normalized is device/resolution-independent and is what the AR/3D stage will want.
 - Keep `caption` out of scope for now (the schema allowed `caption?` as optional — leave a code comment noting it's a future field, don't implement it).
+- **Recordings:** each Start Recording → Stop Recording is one recording. CSV and JSON carry `recording_id` right after `timestamp`. JSON exports also include a `recordings` array with one entry per exported recording: `{ recording_id, start_time, end_time, model, row_count }`. Times are ms epoch; `end_time` is `null` while recording; `model` is the model active at Start Recording.
 - **GPS accuracy is new and matters:** browser GPS is often ±5–20 m. Logging `gps_accuracy` lets us (a) judge how trustworthy the coordinate is and (b) set movement-based sampling thresholds sensibly. Do not drop it.
 
 ### GPS handling
@@ -178,7 +180,7 @@ Two buttons: **Export CSV** and **Export JSON**.
 
 - **CSV:** flat columns in the schema order of §6. Quote the `label` field and escape embedded quotes (the old sketch did `""` escaping — keep that). `bbox` and `bbox_norm` should be split into columns (`bbox_xmin`, `bbox_ymin`, …, `bbox_norm_xmin`, …) so the CSV stays flat and spreadsheet/Blender-friendly. Confidence to 3 decimals, lat/lon to 8.
 - **JSON:** the array of row objects exactly as in §6 (nested `bbox`/`bbox_norm` objects preserved). Also include a small **metadata header object**: `{ exported_at, model, dtype, device, filter_mode, row_count, session_start }`.
-- Filenames: `live-detection_<YYYYMMDD-HHMMSS>.csv` / `.json`.
+- Filenames: `live-detection-rec<N>-<YYYYMMDD-HHMMSS>.csv` / `.json` for one recording, `live-detection-all-<YYYYMMDD-HHMMSS>.csv` / `.json` for all recordings.
 - Trigger download via Blob + object URL (same mechanism the old sketch used).
 
 Both exports respect the currently selected filter mode (§7), except keep a dedicated **"Export Raw JSON"** path that always dumps everything regardless of filter, so raw data is never lost.

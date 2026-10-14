@@ -1,5 +1,6 @@
 // On-demand snapshot of the in-memory detection log. Does not record, detect, or export.
-import { getLiveDetectionLog } from "../live/detection-log.js";
+import { recordingDurationMs } from "../live/detection-log.js";
+import { formatClockTime } from "../utils/time.js";
 
 const CHART_SRC =
   "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js";
@@ -107,9 +108,9 @@ function summarizeDetectionLog(rows) {
   };
 }
 
-function summaryParagraph(stats) {
+function summaryParagraph(stats, subject) {
   return (
-    `This session recorded ${countLabel(stats.detections, "detection", "detections")} ` +
+    `${subject} logged ${countLabel(stats.detections, "detection", "detections")} ` +
     `across ${countLabel(stats.frames, "frame", "frames")} over ${formatDuration(stats.durationMs)}, ` +
     `using ${joinList(stats.models)}. The most frequent label was ${stats.mostFrequent}; ` +
     `average confidence was ${stats.averageConfidence.toFixed(2)}.`
@@ -212,14 +213,39 @@ function setSummaryValue(name, value) {
   }
 }
 
-function renderSummary(stats) {
+function renderSummary(stats, subject) {
   setSummaryValue("detections", String(stats.detections));
   setSummaryValue("frames", String(stats.frames));
   setSummaryValue("confidence", stats.averageConfidence.toFixed(2));
   setSummaryValue("duration", formatDuration(stats.durationMs));
   const paragraph = document.getElementById("summary-text");
   if (paragraph) {
-    paragraph.textContent = summaryParagraph(stats);
+    paragraph.textContent = summaryParagraph(stats, subject);
+  }
+}
+
+function renderRecordingsTable(section, body, selection) {
+  section.classList.toggle("hidden", !selection.all);
+  body.replaceChildren();
+  if (!selection.all) {
+    return;
+  }
+  for (const recording of selection.recordings) {
+    const id = recording.recording_id;
+    const cells = [
+      recording.end_time == null ? `${id} (in progress)` : String(id),
+      formatClockTime(recording.start_time),
+      formatDuration(recordingDurationMs(recording, selection.takenAt)),
+      String(recording.row_count),
+      recording.model ?? "—",
+    ];
+    const row = document.createElement("tr");
+    for (const text of cells) {
+      const cell = document.createElement("td");
+      cell.textContent = text;
+      row.appendChild(cell);
+    }
+    body.appendChild(row);
   }
 }
 
@@ -229,8 +255,10 @@ export function initSessionSummary() {
   const empty = document.getElementById("summary-empty");
   const content = document.getElementById("summary-content");
   const chartNote = document.getElementById("summary-chart-note");
+  const recordingsSection = document.getElementById("summary-recordings");
+  const recordingsBody = document.getElementById("summary-recordings-body");
 
-  if (!panel || !empty || !content) {
+  if (!panel || !empty || !content || !recordingsSection || !recordingsBody) {
     return null;
   }
 
@@ -239,9 +267,9 @@ export function initSessionSummary() {
     destroyChart();
   }
 
-  async function open() {
+  async function open(selection) {
     const generation = ++openGeneration;
-    const rows = getLiveDetectionLog().slice();
+    const rows = selection.rows;
     panel.scrollTop = 0;
 
     const hasRows = rows.length > 0;
@@ -253,7 +281,14 @@ export function initSessionSummary() {
     }
 
     const stats = summarizeDetectionLog(rows);
-    renderSummary(stats);
+    // Start-to-stop time of each recording, so gaps between recordings don't count.
+    stats.durationMs = selection.recordings.reduce(
+      (sum, recording) =>
+        sum + recordingDurationMs(recording, selection.takenAt),
+      0,
+    );
+    renderSummary(stats, selection.all ? "These recordings" : "This recording");
+    renderRecordingsTable(recordingsSection, recordingsBody, selection);
     if (chartNote) {
       chartNote.textContent = "";
       chartNote.classList.add("hidden");

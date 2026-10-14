@@ -215,6 +215,25 @@ button {
   border-color: #c0392b;
 }
 
+/* Less prominent than the other top-bar buttons. */
+.btn--quiet {
+  color: var(--color-text-subtle);
+  background-color: transparent;
+  border-color: transparent;
+}
+
+.btn--quiet:hover {
+  color: var(--color-text);
+  border-color: transparent;
+}
+
+.btn--quiet:disabled,
+.btn--quiet:disabled:hover {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background-color: transparent;
+}
+
 .export-menu__trigger::after {
   content: "";
   width: 7px;
@@ -565,6 +584,12 @@ button {
   align-self: flex-start;
 }
 
+.review-picker {
+  align-self: flex-start;
+  width: auto;
+  max-width: 100%;
+}
+
 .session-summary,
 .session-map {
   flex: 1;
@@ -621,6 +646,34 @@ button {
 .summary-chart-note {
   margin: 8px 0 0;
   color: var(--color-text-subtle);
+}
+
+.summary-table-wrap {
+  overflow-x: auto;
+}
+
+.summary-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-table th,
+.summary-table td {
+  padding: 6px 8px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 0.5px solid var(--color-border);
+}
+
+.summary-table th {
+  font-weight: 500;
+  color: var(--color-text-subtle);
+}
+
+.summary-table tbody tr:last-child td {
+  border-bottom: none;
 }
 
 /* --------------------------------------------------------------------------

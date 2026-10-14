@@ -1,8 +1,11 @@
 // In-memory log: one row per detected object while recording is on. export-live.js reads this.
 
 const log = [];
+// One entry per Start Recording → Stop Recording, numbered from 1 until the log is cleared.
+const recordings = [];
+let activeRecording = null;
+const exportedIds = new Set();
 let sessionStart = null;
-let exported = false;
 const clearListeners = new Set();
 
 export function getLiveDetectionSessionStart() {
@@ -17,13 +20,53 @@ export function getLiveDetectionLogCount() {
   return log.length;
 }
 
-export function isLiveDetectionLogExported() {
-  return exported;
+export function getRecordings() {
+  return recordings;
 }
 
-// Covers the rows logged so far; the next logged row clears it.
-export function markLiveDetectionLogExported() {
-  exported = log.length > 0;
+// null means all recordings.
+export function getRecordingRows(recordingId) {
+  return recordingId == null
+    ? log.slice()
+    : log.filter((row) => row.recording_id === recordingId);
+}
+
+export function recordingDurationMs(recording, now = Date.now()) {
+  return (recording.end_time ?? now) - recording.start_time;
+}
+
+export function startRecording(modelId) {
+  activeRecording = {
+    recording_id: recordings.length + 1,
+    start_time: Date.now(),
+    end_time: null,
+    model: modelId,
+    row_count: 0,
+  };
+  recordings.push(activeRecording);
+}
+
+export function stopRecording() {
+  if (activeRecording) {
+    activeRecording.end_time = Date.now();
+    activeRecording = null;
+  }
+}
+
+// A recording counts as exported once an export included it; rows logged after that undo it.
+export function markRecordingsExported(recordingId) {
+  for (const recording of recordings) {
+    if (recordingId == null || recording.recording_id === recordingId) {
+      exportedIds.add(recording.recording_id);
+    }
+  }
+}
+
+export function getUnexportedRecordingCount() {
+  return recordings.filter(
+    (recording) =>
+      recording.row_count > 0 && !exportedIds.has(recording.recording_id),
+  ).length;
 }
 
 // Views that show a copy of the log use this to reset when it is cleared.
@@ -33,8 +76,10 @@ export function onLiveDetectionLogCleared(listener) {
 
 export function clearLiveDetectionLog() {
   log.length = 0;
+  recordings.length = 0;
+  activeRecording = null;
+  exportedIds.clear();
   sessionStart = null;
-  exported = false;
   for (const listener of clearListeners) {
     listener();
   }
@@ -62,13 +107,17 @@ export function logDetectionFrame({
   modelId,
 }) {
   if (detections.length > 0) {
-    exported = false;
     sessionStart ??= timestamp;
+    if (activeRecording) {
+      activeRecording.row_count += detections.length;
+      exportedIds.delete(activeRecording.recording_id);
+    }
   }
   for (const detection of detections) {
     const hasBox = detection.box != null;
     log.push({
       timestamp,
+      recording_id: activeRecording?.recording_id ?? null,
       lat: gpsFix?.lat ?? null,
       lon: gpsFix?.lon ?? null,
       gps_accuracy: gpsFix?.accuracy ?? null,

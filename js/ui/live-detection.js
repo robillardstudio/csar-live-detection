@@ -21,9 +21,14 @@ import {
   projectPosition,
 } from "../utils/position.js";
 import {
+  clearLiveDetectionLog,
   getLiveDetectionLogCount,
+  getRecordings,
+  getUnexportedRecordingCount,
   logDetectionFrame,
-  markLiveDetectionLogExported,
+  markRecordingsExported,
+  startRecording,
+  stopRecording,
 } from "../live/detection-log.js";
 import {
   exportLiveDetectionCsv,
@@ -35,6 +40,7 @@ import {
 } from "../analysis/objects.js";
 import { classifyImageFromSource } from "../analysis/classify.js";
 import { getSettings, initModelPicker } from "./sidebar.js";
+import { getSelectedRecordingId } from "./app-mode.js";
 
 const ROLLING_WINDOW = 30;
 // Cap the longest edge at 640px so full-resolution camera frames don't exhaust memory on mobile Safari.
@@ -176,6 +182,7 @@ export function initLiveDetectionPage() {
   const recordButton = document.getElementById("btn-record");
   const exportButton = document.getElementById("btn-export");
   const exportMenu = document.getElementById("export-menu");
+  const clearButton = document.getElementById("btn-clear-recordings");
 
   if (
     !video ||
@@ -186,7 +193,8 @@ export function initLiveDetectionPage() {
     !mainStart ||
     !recordButton ||
     !exportButton ||
-    !exportMenu
+    !exportMenu ||
+    !clearButton
   ) {
     return;
   }
@@ -272,6 +280,7 @@ export function initLiveDetectionPage() {
     recordButton.classList.toggle("btn--record-active", isRecording);
     feed.hidden = !running;
     idle.hidden = running;
+    clearButton.disabled = getRecordings().length === 0;
   }
 
   function stopStream() {
@@ -285,6 +294,9 @@ export function initLiveDetectionPage() {
   function stopLiveDetection() {
     running = false;
     busy = false;
+    if (isRecording) {
+      stopRecording();
+    }
     isRecording = false;
     setLiveDetectionActive(false);
     gps?.stop();
@@ -497,12 +509,32 @@ export function initLiveDetectionPage() {
   }
 
   function handleExport(exporter) {
+    const recordingId = getSelectedRecordingId();
     const exportBackend = { ...(backendInfo ?? {}), model: getModelId() };
-    if (exporter(exportBackend)) {
-      markLiveDetectionLogExported();
+    if (exporter(exportBackend, recordingId)) {
+      markRecordingsExported(recordingId);
     } else {
-      showCameraFeedback("Nothing to export — start recording first");
+      showCameraFeedback("Nothing to export — no rows in this selection");
     }
+  }
+
+  // Also ends a recording in progress; Review refreshes through onLiveDetectionLogCleared.
+  function clearRecordings() {
+    const unexported = getUnexportedRecordingCount();
+    if (unexported > 0) {
+      const message =
+        unexported === 1
+          ? "1 recording hasn't been exported. Clear all recordings?"
+          : `${unexported} recordings haven't been exported. Clear all recordings?`;
+      if (!window.confirm(message)) {
+        return;
+      }
+    }
+    isRecording = false;
+    logGeneration += 1;
+    clearLiveDetectionLog();
+    updateControls();
+    updateMetricsPanel();
   }
   function closeExportMenu() {
     exportMenu.hidden = true;
@@ -532,8 +564,14 @@ export function initLiveDetectionPage() {
       return;
     }
     isRecording = !isRecording;
+    if (isRecording) {
+      startRecording(getModelId());
+    } else {
+      stopRecording();
+    }
     updateControls();
   });
+  clearButton.addEventListener("click", clearRecordings);
   exportButton.addEventListener("click", () => {
     if (exportMenu.hidden) {
       openExportMenu();

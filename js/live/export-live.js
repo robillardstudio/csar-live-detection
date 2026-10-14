@@ -1,12 +1,14 @@
 // Turns the in-memory detection log into a CSV or JSON download (via export.js).
 import { downloadFile } from "../utils/export.js";
 import {
-  getLiveDetectionLog,
   getLiveDetectionSessionStart,
+  getRecordingRows,
+  getRecordings,
 } from "./detection-log.js";
 
 const CSV_HEADERS = [
   "timestamp",
+  "recording_id",
   "lat",
   "lon",
   "gps_accuracy",
@@ -64,6 +66,7 @@ function formatNullableNumber(value, digits) {
 function rowToCsvLine(row) {
   return [
     row.timestamp,
+    row.recording_id ?? "",
     formatNullableNumber(row.lat, 8),
     formatNullableNumber(row.lon, 8),
     row.gps_accuracy ?? "",
@@ -111,32 +114,40 @@ function buildMetadata(rows, backendInfo) {
   };
 }
 
-export function exportLiveDetectionCsv(backendInfo) {
-  const rows = getLiveDetectionLog();
+// recordingId null exports all recordings.
+function exportFilename(recordingId, extension) {
+  const scope = recordingId == null ? "all" : `rec${recordingId}`;
+  return `live-detection-${scope}-${formatTimestampStamp()}.${extension}`;
+}
+
+export function exportLiveDetectionCsv(backendInfo, recordingId) {
+  const rows = getRecordingRows(recordingId);
   if (!rows.length) {
     return false;
   }
 
   const csv = [CSV_HEADERS.join(","), ...rows.map(rowToCsvLine)].join("\n");
-  const filename = `live-detection_${formatTimestampStamp()}.csv`;
-  downloadFile(csv, filename, "text/csv;charset=utf-8");
+  downloadFile(csv, exportFilename(recordingId, "csv"), "text/csv;charset=utf-8");
   return true;
 }
 
-export function exportLiveDetectionJson(backendInfo) {
-  const rows = getLiveDetectionLog();
+export function exportLiveDetectionJson(backendInfo, recordingId) {
+  const rows = getRecordingRows(recordingId);
   if (!rows.length) {
     return false;
   }
 
+  const recordings = getRecordings()
+    .filter((item) => recordingId == null || item.recording_id === recordingId)
+    .map((item) => ({ ...item }));
   const payload = {
     ...buildMetadata(rows, backendInfo),
+    recordings,
     rows,
   };
-  const filename = `live-detection_${formatTimestampStamp()}.json`;
   downloadFile(
     JSON.stringify(payload, null, 2),
-    filename,
+    exportFilename(recordingId, "json"),
     "application/json;charset=utf-8",
   );
   return true;

@@ -25,6 +25,7 @@
           <button type="button" class="export-menu__item" role="menuitem" data-export="json">JSON</button>
         </div>
       </div>
+      <button type="button" id="btn-clear-recordings" class="btn btn--quiet hidden" data-show-in="review" disabled>Clear recordings</button>
     </nav>
   </header>
 
@@ -102,6 +103,7 @@
       <section id="review-panel" class="review-panel hidden" aria-label="Review">
         <p id="review-empty" class="review-panel__empty hidden">No recordings yet — switch to Live and press Start Recording.</p>
         <div id="review-body" class="review-panel__body hidden">
+          <select id="review-recording" class="model-picker review-picker" aria-label="Recording"></select>
           <div id="review-tabs" class="segmented review-tabs" role="tablist" aria-label="Review views">
             <button type="button" id="tab-map" class="segmented__option" role="tab" data-review-tab="map" aria-selected="true" aria-controls="session-map">Map</button>
             <button type="button" id="tab-summary" class="segmented__option" role="tab" data-review-tab="summary" aria-selected="false" aria-controls="session-summary" tabindex="-1">Summary</button>
@@ -113,7 +115,7 @@
               <button type="button" class="map-mode__option" data-map-mode="objects" aria-pressed="false">Where objects were</button>
             </div>
 
-            <p id="map-empty" class="session-map__empty hidden">No location data yet — record a session with GPS first</p>
+            <p id="map-empty" class="session-map__empty hidden">No location data in this selection.</p>
             <p id="map-error" class="session-map__empty hidden">The map could not be loaded.</p>
             <p id="map-objects-empty" class="session-map__note hidden">No object positions were estimated in this session. Estimates need GPS, a compass reading within ±30°, and a label with a known size that isn't cut off by the frame edge.</p>
             <div id="map-canvas" class="session-map__canvas hidden" role="region" aria-label="Map of the walked path"></div>
@@ -121,7 +123,7 @@
           </section>
 
           <section id="session-summary" class="session-summary hidden" role="tabpanel" aria-labelledby="tab-summary">
-            <p id="summary-empty" class="session-summary__empty hidden">No data yet — record a session first</p>
+            <p id="summary-empty" class="session-summary__empty hidden">No detections in this selection.</p>
 
             <div id="summary-content" class="session-summary__content hidden">
               <div class="summary-metrics">
@@ -146,6 +148,24 @@
               <section class="live-card">
                 <h2 class="live-card__label">Summary</h2>
                 <p id="summary-text" class="summary-text"></p>
+              </section>
+
+              <section id="summary-recordings" class="live-card hidden">
+                <h2 class="live-card__label">Recordings</h2>
+                <div class="summary-table-wrap">
+                  <table class="summary-table">
+                    <thead>
+                      <tr>
+                        <th scope="col">Recording</th>
+                        <th scope="col">Start</th>
+                        <th scope="col">Duration</th>
+                        <th scope="col">Rows</th>
+                        <th scope="col">Model</th>
+                      </tr>
+                    </thead>
+                    <tbody id="summary-recordings-body"></tbody>
+                  </table>
+                </div>
               </section>
 
               <section class="live-card">

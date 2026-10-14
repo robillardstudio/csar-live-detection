@@ -1,6 +1,4 @@
 // On-demand map of the walked GPS path and detections from the in-memory detection log. Read-only.
-import { getLiveDetectionLog } from "../live/detection-log.js";
-
 const LEAFLET_CSS =
   "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
 const LEAFLET_JS =
@@ -145,6 +143,24 @@ function extractPath(rows) {
     path.push([fix.lat, fix.lon]);
   }
   return path;
+}
+
+// One path per recording, so the end of one walk isn't joined to the start of the next.
+function extractPaths(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = row.recording_id ?? null;
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key).push(row);
+  }
+  return [...groups.entries()]
+    .map(([recordingId, groupRows]) => ({
+      recordingId,
+      points: extractPath(groupRows),
+    }))
+    .filter((item) => item.points.length > 0);
 }
 
 // Fixed colors first, then FNV-1a over the label name, so a label keeps its color across sessions.
@@ -412,7 +428,7 @@ function renderLegend(legend, detections) {
   }
 }
 
-function drawMap(L, container, path) {
+function drawMap(L, container, paths) {
   destroyMap();
   map = L.map(container, { zoomControl: true });
   L.tileLayer(TILE_URL, {
@@ -421,33 +437,36 @@ function drawMap(L, container, path) {
   }).addTo(map);
 
   const accent = themeColor("--color-accent", "#2563eb");
-  const start = path[0];
-  const end = path.at(-1);
+  const named = paths.length > 1;
 
-  if (path.length > 1) {
-    L.polyline(path, { color: accent, weight: 4, opacity: 0.9 }).addTo(map);
-  }
+  for (const { recordingId, points } of paths) {
+    const prefix = named ? `Recording ${recordingId} · ` : "";
 
-  // Hollow rings drawn before the dots so they mark the location without covering detections.
-  // Different radii keep both rings visible when start and end coincide.
-  L.circleMarker(start, {
-    radius: 10,
-    color: "#16a34a",
-    weight: 3,
-    fill: false,
-  })
-    .bindTooltip("Start")
-    .addTo(map);
+    if (points.length > 1) {
+      L.polyline(points, { color: accent, weight: 4, opacity: 0.9 }).addTo(map);
+    }
 
-  if (path.length > 1) {
-    L.circleMarker(end, {
-      radius: 7,
-      color: "#dc2626",
+    // Hollow rings drawn before the dots so they mark the location without covering detections.
+    // Different radii keep both rings visible when start and end coincide.
+    L.circleMarker(points[0], {
+      radius: 10,
+      color: "#16a34a",
       weight: 3,
       fill: false,
     })
-      .bindTooltip("End")
+      .bindTooltip(`${prefix}Start`)
       .addTo(map);
+
+    if (points.length > 1) {
+      L.circleMarker(points.at(-1), {
+        radius: 7,
+        color: "#dc2626",
+        weight: 3,
+        fill: false,
+      })
+        .bindTooltip(`${prefix}End`)
+        .addTo(map);
+    }
   }
 
   // Added after the rings so detections draw above them.
@@ -476,6 +495,8 @@ export function initSessionMap() {
 
   const modeButtons = [...modeGroup.querySelectorAll("[data-map-mode]")];
   let leaflet = null;
+  let paths = [];
+  // Every path point together, for fitting the view.
   let path = [];
   let snapshot = null;
   let fitPending = false;
@@ -512,10 +533,11 @@ export function initSessionMap() {
     objectsEmpty.classList.add("hidden");
   }
 
-  async function open() {
+  async function open(selection) {
     const generation = ++openGeneration;
-    const rows = getLiveDetectionLog().slice();
-    path = extractPath(rows);
+    const rows = selection.rows;
+    paths = extractPaths(rows);
+    path = paths.flatMap((item) => item.points);
     snapshot = {
       viewer: extractDetectionPoints(rows, viewerPosition),
       objects: extractDetectionPoints(rows, objectPosition),
@@ -539,7 +561,7 @@ export function initSessionMap() {
         return;
       }
       leaflet = L;
-      drawMap(L, canvas, path);
+      drawMap(L, canvas, paths);
       // The tab may have been hidden while Leaflet loaded; fit again once it is shown.
       fitPending = canvas.offsetWidth === 0;
       renderMode();
