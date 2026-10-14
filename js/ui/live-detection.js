@@ -21,9 +21,9 @@ import {
   projectPosition,
 } from "../utils/position.js";
 import {
-  clearLiveDetectionLog,
   getLiveDetectionLogCount,
   logDetectionFrame,
+  markLiveDetectionLogExported,
 } from "../live/detection-log.js";
 import {
   exportLiveDetectionCsv,
@@ -210,11 +210,22 @@ export function initLiveDetectionPage() {
   let lastCompletedInferenceAt = 0;
   let frameW = 0;
   let frameH = 0;
+  let logGeneration = 0;
 
   function setMetric(name, value) {
     const target = document.querySelector(`[data-metric="${name}"]`);
     if (target) {
       target.textContent = value;
+    }
+  }
+
+  // The Map and Summary panels cover the camera, so close whichever is open.
+  function closeOverlayPanels() {
+    for (const id of ["btn-map", "btn-summary"]) {
+      const button = document.getElementById(id);
+      if (button?.getAttribute("aria-pressed") === "true") {
+        button.click();
+      }
     }
   }
 
@@ -333,6 +344,8 @@ export function initLiveDetectionPage() {
     frameCtx.drawImage(video, 0, 0, frameW, frameH);
     // Captured with the frame, not after inference: heading changes faster than GPS.
     const orientation = compass?.getReading() ?? null;
+    // A frame grabbed before the log is cleared is not logged after it.
+    const generation = logGeneration;
 
     const { parameters } = getSettings();
     const t0 = performance.now();
@@ -349,7 +362,7 @@ export function initLiveDetectionPage() {
         mediaWrap.querySelector(".bounding-boxes")?.remove();
         renderClassificationReadout(predictions);
 
-        if (isRecording) {
+        if (isRecording && generation === logGeneration) {
           logDetectionFrame({
             detections: predictions.map((item) => ({
               label: item.label,
@@ -394,7 +407,7 @@ export function initLiveDetectionPage() {
         renderClassificationReadout(null);
         renderBoundingBoxesOnContainer(mediaWrap, detections, frameCanvas);
 
-        if (isRecording) {
+        if (isRecording && generation === logGeneration) {
           logDetectionFrame({
             detections,
             frameW,
@@ -429,6 +442,7 @@ export function initLiveDetectionPage() {
       return;
     }
     const compassPermission = requestCompassPermission();
+    closeOverlayPanels();
 
     liveToggle.disabled = true;
     mainStart.disabled = true;
@@ -439,7 +453,6 @@ export function initLiveDetectionPage() {
       backendInfo = await getObjectDetectorBackend();
       setMetric("backend", `${backendInfo.device} · ${backendInfo.dtype}`);
 
-      clearLiveDetectionLog();
       metrics.reset();
       gpsFix = null;
       lastCompletedInferenceAt = 0;
@@ -496,11 +509,12 @@ export function initLiveDetectionPage() {
 
   function handleExport(exporter) {
     const exportBackend = { ...(backendInfo ?? {}), model: getModelId() };
-    if (!exporter(exportBackend)) {
+    if (exporter(exportBackend)) {
+      markLiveDetectionLogExported();
+    } else {
       showCameraFeedback("Nothing to export — start recording first");
     }
   }
-
   function closeExportMenu() {
     exportMenu.hidden = true;
     exportButton.setAttribute("aria-expanded", "false");

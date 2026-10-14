@@ -1,5 +1,8 @@
 // On-demand map of the walked GPS path and detections from the in-memory detection log. Read-only.
-import { getLiveDetectionLog } from "../live/detection-log.js";
+import {
+  getLiveDetectionLog,
+  onLiveDetectionLogCleared,
+} from "../live/detection-log.js";
 
 const LEAFLET_CSS =
   "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
@@ -594,6 +597,12 @@ export function initSessionMap() {
   summaryButton?.addEventListener("click", () => {
     if (isOpen()) {
       closeMap({ restoreFocus: false });
+    }
+  });
+  // Redraw from the empty log: removes the path, rings, and dots and shows the empty state.
+  onLiveDetectionLogCleared(() => {
+    if (isOpen()) {
+      openMap();
     }
   });
 }

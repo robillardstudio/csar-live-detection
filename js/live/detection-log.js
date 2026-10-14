@@ -2,6 +2,8 @@
 
 const log = [];
 let sessionStart = null;
+let exported = false;
+const clearListeners = new Set();
 
 export function getLiveDetectionSessionStart() {
   return sessionStart;
@@ -15,9 +17,27 @@ export function getLiveDetectionLogCount() {
   return log.length;
 }
 
+export function isLiveDetectionLogExported() {
+  return exported;
+}
+
+// Covers the rows logged so far; the next logged row clears it.
+export function markLiveDetectionLogExported() {
+  exported = log.length > 0;
+}
+
+// Views that show a copy of the log use this to reset when it is cleared.
+export function onLiveDetectionLogCleared(listener) {
+  clearListeners.add(listener);
+}
+
 export function clearLiveDetectionLog() {
   log.length = 0;
-  sessionStart = Date.now();
+  sessionStart = null;
+  exported = false;
+  for (const listener of clearListeners) {
+    listener();
+  }
 }
 
 // Pixel bbox matches the inference frame; bbox_norm (0–1) is resolution-independent for the later AR/3D stage.
@@ -41,6 +61,10 @@ export function logDetectionFrame({
   backend,
   modelId,
 }) {
+  if (detections.length > 0) {
+    exported = false;
+    sessionStart ??= timestamp;
+  }
   for (const detection of detections) {
     const hasBox = detection.box != null;
     log.push({

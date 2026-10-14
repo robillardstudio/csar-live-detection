@@ -1,5 +1,8 @@
 // On-demand snapshot of the in-memory detection log. Does not record, detect, or export.
-import { getLiveDetectionLog } from "../live/detection-log.js";
+import {
+  getLiveDetectionLog,
+  onLiveDetectionLogCleared,
+} from "../live/detection-log.js";
 
 const CHART_SRC =
   "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js";
@@ -294,4 +297,10 @@ export function initSessionSummary() {
     }
   });
   closeButton.addEventListener("click", closeSummary);
+  // Redraw from the empty log so the open panel shows its empty state.
+  onLiveDetectionLogCleared(() => {
+    if (button.getAttribute("aria-pressed") === "true") {
+      openSummary();
+    }
+  });
 }
