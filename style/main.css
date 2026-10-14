@@ -689,31 +689,6 @@ button {
    Session map (on-demand snapshot of the walked GPS path)
    -------------------------------------------------------------------------- */
 
-.map-mode {
-  display: inline-flex;
-  align-self: flex-start;
-  padding: 2px;
-  background-color: var(--color-bg-panel);
-  border: 0.5px solid var(--color-border);
-  border-radius: 8px;
-}
-
-.map-mode__option {
-  padding: 6px 12px;
-  font: inherit;
-  font-size: 13px;
-  color: var(--color-text-subtle);
-  background: none;
-  border: 0;
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.map-mode__option[aria-pressed="true"] {
-  color: var(--color-text);
-  background-color: var(--color-btn-active);
-}
-
 .session-map__note {
   margin: 0;
   font-size: 13px;
@@ -738,6 +713,70 @@ button {
   border-radius: var(--live-card-radius);
   overflow: hidden;
   background-color: var(--color-bg-panel);
+}
+
+/* Leaflet's CSS loads after this file, so these overrides need the extra class. */
+.session-map__canvas.leaflet-container {
+  background-color: var(--color-bg-page);
+}
+
+.session-map__canvas.leaflet-container .leaflet-control-layers {
+  color: var(--color-text);
+  background-color: var(--color-bg-panel);
+  border: 0.5px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.2);
+}
+
+.session-map__canvas.leaflet-container .leaflet-control-layers-expanded {
+  padding: 8px 12px 8px 8px;
+}
+
+.session-map__canvas.leaflet-container .leaflet-control-layers label {
+  margin: 2px 0;
+  font-size: 13px;
+}
+
+.session-map__canvas.leaflet-container .leaflet-control-layers-separator {
+  margin: 6px -12px 6px -8px;
+  border-top-color: var(--color-border);
+}
+
+.session-map__canvas .leaflet-control-layers input {
+  accent-color: var(--color-accent);
+}
+
+.map-layers__hint {
+  color: var(--color-text-subtle);
+}
+
+.map--zoomed-in .map-layers__hint {
+  display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .session-map__canvas .leaflet-control-layers-toggle {
+    filter: invert(1);
+  }
+}
+
+.session-map__canvas.leaflet-container .map-dot-label {
+  display: none;
+  padding: 1px 5px;
+  font-size: 11px;
+  color: var(--color-text);
+  background-color: var(--color-bg-panel);
+  border: 0.5px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+.session-map__canvas.leaflet-container .map-dot-label::before {
+  display: none;
+}
+
+.session-map__canvas.map--labels .map-dot-label {
+  display: block;
 }
 
 .session-map__canvas .leaflet-control-attribution {
@@ -788,9 +827,8 @@ button {
 
 .map-legend {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 14px;
+  flex-direction: column;
+  gap: 8px;
   padding: 10px 14px;
   font-size: 12px;
   line-height: 1.4;
@@ -798,6 +836,13 @@ button {
   background-color: var(--color-bg-panel);
   border: 0.5px solid var(--color-border);
   border-radius: var(--live-card-radius);
+}
+
+.map-legend__group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
 }
 
 .map-legend__title {
@@ -826,6 +871,13 @@ button {
   width: 10px;
   height: 10px;
   border-radius: 50%;
+}
+
+.map-legend__swatch--line {
+  width: 16px;
+  height: 0;
+  border-top: 3px solid;
+  border-radius: 0;
 }
 
 .map-legend__count {

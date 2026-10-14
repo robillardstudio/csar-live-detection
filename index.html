@@ -141,16 +141,11 @@
           </div>
 
           <section id="session-map" class="session-map" role="tabpanel" aria-labelledby="tab-map">
-            <div id="map-mode" class="map-mode hidden" role="group" aria-label="Map view">
-              <button type="button" class="map-mode__option" data-map-mode="viewer" aria-pressed="true">Where I was</button>
-              <button type="button" class="map-mode__option" data-map-mode="objects" aria-pressed="false">Where objects were</button>
-            </div>
-
             <p id="map-empty" class="session-map__empty hidden">No location data in this selection.</p>
             <p id="map-error" class="session-map__empty hidden">The map could not be loaded.</p>
             <p id="map-objects-empty" class="session-map__note hidden">No object positions were estimated in this session. Estimates need GPS, a compass reading within ±30°, and a label with a known size that isn't cut off by the frame edge.</p>
             <div id="map-canvas" class="session-map__canvas hidden" role="region" aria-label="Map of the walked path"></div>
-            <div id="map-legend" class="map-legend hidden" role="group" aria-label="Detection label colors"></div>
+            <div id="map-legend" class="map-legend hidden" role="group" aria-label="Map legend"></div>
           </section>
 
           <section id="session-summary" class="session-summary hidden" role="tabpanel" aria-labelledby="tab-summary">

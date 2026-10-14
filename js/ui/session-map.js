@@ -7,6 +7,19 @@ const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const TILE_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 const SINGLE_POINT_ZOOM = 18;
+const MAX_ZOOM = 19;
+// Below this zoom, dots are too close together for readable labels.
+const LABEL_MIN_ZOOM = 18;
+const PHONE_QUERY = "(max-width: 640px)";
+// One color per recording with "All recordings"; none match a label color. Paths past the palette are dashed.
+const PATH_PALETTE = ["#2563eb", "#65a30d", "#4f46e5"];
+const OVERLAYS = [
+  ["path", "Walking path"],
+  ["viewer", "Where I was"],
+  ["objects", "Where objects were"],
+  ["sightLines", "Sight lines"],
+  ["labels", 'Labels <span class="map-layers__hint">(zoom in)</span>'],
+];
 // All label colors avoid the path blue and the start green / end red.
 const FIXED_LABEL_COLORS = new Map([
   ["person", "#f59e0b"],
@@ -49,12 +62,13 @@ const FAN_MIN_RADIUS_PX = 16;
 // Arc length reserved per fanned dot: dot diameter plus a small gap.
 const FAN_SPACING_PX = 13;
 
+// Kept for the page visit across tabs, recordings and mode switches; no storage.
+const layerState = { base: "street", overlays: new Set(["path", "viewer"]) };
+
 let map = null;
-let detectionLayer = null;
-let fanListener = null;
+let layers = null;
 let leafletLoader = null;
 let openGeneration = 0;
-let mapMode = "viewer";
 
 function loadStylesheet(href) {
   if (document.querySelector(`link[href="${href}"]`)) {
@@ -264,13 +278,14 @@ function themeColor(name, fallback) {
 }
 
 function destroyMap() {
+  // map.remove() fires overlayremove; unbind first so the saved layer choices survive.
+  map?.off("baselayerchange overlayadd overlayremove");
   map?.remove();
   map = null;
-  detectionLayer = null;
-  fanListener = null;
+  layers = null;
 }
 
-function detectionPopup(dot, stackSize) {
+function detectionPopup(dot, stackSize, kind) {
   const content = document.createElement("div");
   const title = document.createElement("p");
   title.className = "map-popup__title";
@@ -280,6 +295,12 @@ function detectionPopup(dot, stackSize) {
     dot.distance == null ? "" : ` · ~${Math.round(dot.distance)} m`;
   title.textContent = `${dot.label} — ${confidence}${distance}`;
   content.appendChild(title);
+
+  const where = document.createElement("p");
+  where.className = "map-popup__note";
+  where.textContent =
+    kind === "objects" ? "Estimated object position" : "Your position";
+  content.appendChild(where);
 
   if (dot.count > 1) {
     const note = document.createElement("p");
@@ -306,7 +327,8 @@ function fanOffset(index, count) {
   return [radius * Math.cos(angle), radius * Math.sin(angle)];
 }
 
-function drawDetections(L, detections, panel) {
+function drawDots(L, detections, kind, panel) {
+  const layer = L.layerGroup();
   const groups = new Map();
   for (const dot of detections.dots) {
     const key = `${dot.lat.toFixed(DEDUPE_DECIMALS)},${dot.lon.toFixed(DEDUPE_DECIMALS)}`;
@@ -320,44 +342,101 @@ function drawDetections(L, detections, panel) {
   for (const group of groups.values()) {
     const center = L.latLng(group[0].lat, group[0].lon);
     group.forEach((dot, index) => {
+      // Label text is set as a text node; Leaflet would parse a string as HTML.
       const marker = L.circleMarker(center, {
+        pane: "mapDots",
         radius: 5,
         color: panel,
         weight: 1,
         fillColor: detections.colors.get(dot.label),
         fillOpacity: 0.9,
       })
-        .bindPopup(detectionPopup(dot, group.length))
-        .addTo(detectionLayer);
+        .bindPopup(detectionPopup(dot, group.length, kind))
+        .bindTooltip(document.createTextNode(dot.label), {
+          permanent: true,
+          direction: "right",
+          offset: [6, 0],
+          className: "map-dot-label",
+        })
+        .addTo(layer);
       if (group.length > 1) {
         fanned.push({ marker, center, offset: L.point(fanOffset(index, group.length)) });
       }
     });
   }
-
-  function placeFanned() {
-    const zoom = map.getZoom();
-    for (const item of fanned) {
-      const point = map.project(item.center, zoom).add(item.offset);
-      item.marker.setLatLng(map.unproject(point, zoom));
-    }
-  }
-
-  placeFanned();
-  map.on("zoomend", placeFanned);
-  return placeFanned;
+  return { layer, fanned };
 }
 
-// Drawn before the dots so the dots stay on top and clickable.
+function placeFanned(fanned) {
+  const zoom = map.getZoom();
+  for (const item of fanned) {
+    const point = map.project(item.center, zoom).add(item.offset);
+    item.marker.setLatLng(map.unproject(point, zoom));
+  }
+}
+
 function drawSightLines(L, detections) {
+  const layer = L.layerGroup();
   for (const dot of detections.dots) {
     L.polyline([dot.viewer, [dot.lat, dot.lon]], {
+      pane: "mapLines",
       color: detections.colors.get(dot.label),
       weight: 1.5,
       opacity: 0.4,
       interactive: false,
-    }).addTo(detectionLayer);
+    }).addTo(layer);
   }
+  return layer;
+}
+
+function pathStyle(index) {
+  const color = PATH_PALETTE[index % PATH_PALETTE.length];
+  return index < PATH_PALETTE.length ? { color } : { color, dashArray: "8 6" };
+}
+
+function drawPaths(L, paths, accent) {
+  const layer = L.layerGroup();
+  const named = paths.length > 1;
+  const recordings = [];
+
+  paths.forEach(({ recordingId, points }, index) => {
+    const name = `Recording ${recordingId}`;
+    const prefix = named ? `${name} · ` : "";
+    const style = named ? pathStyle(index) : { color: accent };
+
+    if (points.length > 1) {
+      L.polyline(points, { pane: "mapPath", weight: 4, opacity: 0.9, ...style }).addTo(layer);
+    }
+
+    // Hollow rings mark the location without covering detections.
+    // Different radii keep both rings visible when start and end coincide.
+    L.circleMarker(points[0], {
+      pane: "mapPath",
+      radius: 10,
+      color: "#16a34a",
+      weight: 3,
+      fill: false,
+    })
+      .bindTooltip(`${prefix}Start`)
+      .addTo(layer);
+
+    if (points.length > 1) {
+      L.circleMarker(points.at(-1), {
+        pane: "mapPath",
+        radius: 7,
+        color: "#dc2626",
+        weight: 3,
+        fill: false,
+      })
+        .bindTooltip(`${prefix}End`)
+        .addTo(layer);
+    }
+
+    if (named) {
+      recordings.push({ name, ...style });
+    }
+  });
+  return { layer, recordings };
 }
 
 function fitView(points) {
@@ -368,109 +447,153 @@ function fitView(points) {
   }
 }
 
-function showDetections(L, mode, path, snapshot) {
-  if (fanListener) {
-    map.off("zoomend", fanListener);
-  }
-  detectionLayer.clearLayers();
-  const detections = snapshot[mode];
-  if (mode === "objects") {
-    drawSightLines(L, detections);
-    fitView([...path, ...detections.dots.map((dot) => [dot.lat, dot.lon])]);
-  } else {
-    fitView(path);
-  }
-  fanListener = drawDetections(
-    L,
-    detections,
-    themeColor("--color-bg-panel", "#ffffff"),
-  );
-}
-
-// Rendered below the map rather than as a Leaflet control: controls always stack above popups.
-function renderLegend(legend, detections) {
-  legend.replaceChildren();
-  legend.classList.toggle("hidden", detections.labels.length === 0);
-  if (!detections.labels.length) {
-    return;
-  }
+function legendGroup(title, items) {
+  const group = document.createElement("div");
+  group.className = "map-legend__group";
 
   const heading = document.createElement("p");
   heading.className = "map-legend__title";
-  heading.textContent = "Labels";
+  heading.textContent = title;
 
   const list = document.createElement("ul");
   list.className = "map-legend__list";
-  for (const item of detections.labels.slice(0, LEGEND_LIMIT)) {
+  for (const item of items) {
     const row = document.createElement("li");
     row.className = "map-legend__item";
-    const swatch = document.createElement("span");
-    swatch.className = "map-legend__swatch";
-    swatch.style.backgroundColor = detections.colors.get(item.label);
     const name = document.createElement("span");
     name.className = "map-legend__label";
-    name.textContent = item.label;
-    const count = document.createElement("span");
-    count.className = "map-legend__count";
-    count.textContent = String(item.count);
-    row.append(swatch, name, count);
+    name.textContent = item.name;
+    row.append(item.swatch, name);
+    if (item.count != null) {
+      const count = document.createElement("span");
+      count.className = "map-legend__count";
+      count.textContent = String(item.count);
+      row.appendChild(count);
+    }
     list.appendChild(row);
   }
 
-  legend.append(heading, list);
-
-  const hidden = detections.labels.length - LEGEND_LIMIT;
-  if (hidden > 0) {
-    const more = document.createElement("p");
-    more.className = "map-legend__more";
-    more.textContent = `+${hidden} more ${hidden === 1 ? "label" : "labels"}`;
-    legend.appendChild(more);
-  }
+  group.append(heading, list);
+  return group;
 }
 
-function drawMap(L, container, paths) {
-  destroyMap();
-  map = L.map(container, { zoomControl: true });
-  L.tileLayer(TILE_URL, {
-    maxZoom: 19,
-    attribution: TILE_ATTRIBUTION,
-  }).addTo(map);
+// Rendered below the map rather than as a Leaflet control: controls always stack above popups.
+function renderLegend(legend, recordings, detections) {
+  const groups = [];
 
-  const accent = themeColor("--color-accent", "#2563eb");
-  const named = paths.length > 1;
-
-  for (const { recordingId, points } of paths) {
-    const prefix = named ? `Recording ${recordingId} · ` : "";
-
-    if (points.length > 1) {
-      L.polyline(points, { color: accent, weight: 4, opacity: 0.9 }).addTo(map);
-    }
-
-    // Hollow rings drawn before the dots so they mark the location without covering detections.
-    // Different radii keep both rings visible when start and end coincide.
-    L.circleMarker(points[0], {
-      radius: 10,
-      color: "#16a34a",
-      weight: 3,
-      fill: false,
-    })
-      .bindTooltip(`${prefix}Start`)
-      .addTo(map);
-
-    if (points.length > 1) {
-      L.circleMarker(points.at(-1), {
-        radius: 7,
-        color: "#dc2626",
-        weight: 3,
-        fill: false,
-      })
-        .bindTooltip(`${prefix}End`)
-        .addTo(map);
-    }
+  if (recordings.length) {
+    groups.push(
+      legendGroup(
+        "Recordings",
+        recordings.map((recording) => {
+          const swatch = document.createElement("span");
+          swatch.className = "map-legend__swatch map-legend__swatch--line";
+          swatch.style.borderTopColor = recording.color;
+          if (recording.dashArray) {
+            swatch.style.borderTopStyle = "dashed";
+          }
+          return { swatch, name: recording.name };
+        }),
+      ),
+    );
   }
 
-  // Added after the rings so detections draw above them.
-  detectionLayer = L.layerGroup().addTo(map);
+  if (detections?.labels.length) {
+    const group = legendGroup(
+      "Labels",
+      detections.labels.slice(0, LEGEND_LIMIT).map((item) => {
+        const swatch = document.createElement("span");
+        swatch.className = "map-legend__swatch";
+        swatch.style.backgroundColor = detections.colors.get(item.label);
+        return { swatch, name: item.label, count: item.count };
+      }),
+    );
+    const hidden = detections.labels.length - LEGEND_LIMIT;
+    if (hidden > 0) {
+      const more = document.createElement("p");
+      more.className = "map-legend__more";
+      more.textContent = `+${hidden} more ${hidden === 1 ? "label" : "labels"}`;
+      group.appendChild(more);
+    }
+    groups.push(group);
+  }
+
+  legend.replaceChildren(...groups);
+  legend.classList.toggle("hidden", groups.length === 0);
+}
+
+function drawMap(L, container, paths, snapshot, onChange) {
+  destroyMap();
+  // No tile layer under "None", so the map needs its own zoom limit.
+  map = L.map(container, { zoomControl: true, maxZoom: MAX_ZOOM });
+  // Fixed panes keep path < sight lines < dots when layers are toggled off and on again.
+  map.createPane("mapPath").style.zIndex = "410";
+  map.createPane("mapLines").style.zIndex = "420";
+  map.createPane("mapDots").style.zIndex = "430";
+
+  const panel = themeColor("--color-bg-panel", "#ffffff");
+  const viewer = drawDots(L, snapshot.viewer, "viewer", panel);
+  const objects = drawDots(L, snapshot.objects, "objects", panel);
+  const path = drawPaths(L, paths, themeColor("--color-accent", "#2563eb"));
+
+  const bases = {
+    street: L.tileLayer(TILE_URL, {
+      maxZoom: MAX_ZOOM,
+      attribution: TILE_ATTRIBUTION,
+    }),
+    none: L.layerGroup(),
+  };
+  const overlays = {
+    path: path.layer,
+    viewer: viewer.layer,
+    objects: objects.layer,
+    sightLines: drawSightLines(L, snapshot.objects),
+    // Empty; only switches the label CSS class.
+    labels: L.layerGroup(),
+  };
+
+  bases[layerState.base].addTo(map);
+  for (const key of layerState.overlays) {
+    overlays[key].addTo(map);
+  }
+
+  const keyOf = new Map(
+    [...Object.entries(bases), ...Object.entries(overlays)].map(
+      ([key, layer]) => [layer, key],
+    ),
+  );
+  // Added after the saved layers so the control starts with the right boxes ticked.
+  L.control
+    .layers(
+      { "Street map": bases.street, None: bases.none },
+      Object.fromEntries(OVERLAYS.map(([key, name]) => [name, overlays[key]])),
+      { position: "topright", collapsed: window.matchMedia(PHONE_QUERY).matches },
+    )
+    .addTo(map);
+
+  map.on("baselayerchange", (event) => {
+    layerState.base = keyOf.get(event.layer);
+  });
+  map.on("overlayadd overlayremove", (event) => {
+    const key = keyOf.get(event.layer);
+    if (event.type === "overlayadd") {
+      layerState.overlays.add(key);
+    } else {
+      layerState.overlays.delete(key);
+    }
+    onChange();
+  });
+
+  const fanned = [...viewer.fanned, ...objects.fanned];
+  map.on("zoomend", () => {
+    placeFanned(fanned);
+    onChange();
+  });
+
+  layers = {
+    recordings: path.recordings,
+    placeFanned: () => placeFanned(fanned),
+  };
 }
 
 // The Review panel decides when the map is visible; this only builds, clears, and re-measures it.
@@ -479,44 +602,44 @@ export function initSessionMap() {
   const errorNote = document.getElementById("map-error");
   const canvas = document.getElementById("map-canvas");
   const legend = document.getElementById("map-legend");
-  const modeGroup = document.getElementById("map-mode");
   const objectsEmpty = document.getElementById("map-objects-empty");
 
-  if (
-    !empty ||
-    !errorNote ||
-    !canvas ||
-    !legend ||
-    !modeGroup ||
-    !objectsEmpty
-  ) {
+  if (!empty || !errorNote || !canvas || !legend || !objectsEmpty) {
     return null;
   }
 
-  const modeButtons = [...modeGroup.querySelectorAll("[data-map-mode]")];
-  let leaflet = null;
-  let paths = [];
-  // Every path point together, for fitting the view.
-  let path = [];
   let snapshot = null;
+  // Path points and object estimates, so turning a layer on never needs a refit.
+  let fitPoints = [];
   let fitPending = false;
 
-  function renderMode() {
-    for (const option of modeButtons) {
-      option.setAttribute(
-        "aria-pressed",
-        String(option.dataset.mapMode === mapMode),
-      );
-    }
-    objectsEmpty.classList.toggle(
-      "hidden",
-      !map || mapMode !== "objects" || snapshot.objects.dots.length > 0,
-    );
+  function syncLayers() {
     if (!map) {
       return;
     }
-    showDetections(leaflet, mapMode, path, snapshot);
-    renderLegend(legend, snapshot[mapMode]);
+    const on = layerState.overlays;
+    const zoomedIn = map.getZoom() >= LABEL_MIN_ZOOM;
+    canvas.classList.toggle("map--zoomed-in", zoomedIn);
+    canvas.classList.toggle("map--labels", zoomedIn && on.has("labels"));
+    objectsEmpty.classList.toggle(
+      "hidden",
+      !on.has("objects") || snapshot.objects.dots.length > 0,
+    );
+    // Every estimate row also has a viewer position, so the viewer labels cover both dot layers.
+    const dots = on.has("viewer")
+      ? snapshot.viewer
+      : on.has("objects")
+        ? snapshot.objects
+        : null;
+    renderLegend(legend, on.has("path") ? layers.recordings : [], dots);
+    // The legend and note change the canvas height; Leaflet caches its size.
+    map.invalidateSize();
+  }
+
+  function fit() {
+    syncLayers();
+    fitView(fitPoints);
+    layers.placeFanned();
   }
 
   function clearLegend() {
@@ -529,19 +652,23 @@ export function initSessionMap() {
     fitPending = false;
     destroyMap();
     clearLegend();
-    modeGroup.classList.add("hidden");
     objectsEmpty.classList.add("hidden");
+    canvas.classList.remove("map--zoomed-in", "map--labels");
   }
 
   async function open(selection) {
     const generation = ++openGeneration;
     const rows = selection.rows;
-    paths = extractPaths(rows);
-    path = paths.flatMap((item) => item.points);
+    const paths = extractPaths(rows);
+    const path = paths.flatMap((item) => item.points);
     snapshot = {
       viewer: extractDetectionPoints(rows, viewerPosition),
       objects: extractDetectionPoints(rows, objectPosition),
     };
+    fitPoints = [
+      ...path,
+      ...snapshot.objects.dots.map((dot) => [dot.lat, dot.lon]),
+    ];
     errorNote.classList.add("hidden");
     objectsEmpty.classList.add("hidden");
     clearLegend();
@@ -549,7 +676,6 @@ export function initSessionMap() {
     const hasPath = path.length > 0;
     empty.classList.toggle("hidden", hasPath);
     canvas.classList.toggle("hidden", !hasPath);
-    modeGroup.classList.toggle("hidden", !hasPath);
     if (!hasPath) {
       destroyMap();
       return;
@@ -560,11 +686,10 @@ export function initSessionMap() {
       if (generation !== openGeneration || !L) {
         return;
       }
-      leaflet = L;
-      drawMap(L, canvas, paths);
+      drawMap(L, canvas, paths, snapshot, syncLayers);
       // The tab may have been hidden while Leaflet loaded; fit again once it is shown.
       fitPending = canvas.offsetWidth === 0;
-      renderMode();
+      fit();
     } catch (error) {
       console.error("[MAP] map failed:", error);
       if (generation !== openGeneration) {
@@ -572,7 +697,6 @@ export function initSessionMap() {
       }
       destroyMap();
       canvas.classList.add("hidden");
-      modeGroup.classList.add("hidden");
       errorNote.classList.remove("hidden");
     }
   }
@@ -585,18 +709,8 @@ export function initSessionMap() {
     map.invalidateSize();
     if (fitPending) {
       fitPending = false;
-      renderMode();
+      fit();
     }
-  }
-
-  for (const option of modeButtons) {
-    option.addEventListener("click", () => {
-      if (option.dataset.mapMode === mapMode) {
-        return;
-      }
-      mapMode = option.dataset.mapMode;
-      renderMode();
-    });
   }
 
   return { open, close, resize };
