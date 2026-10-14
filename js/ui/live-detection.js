@@ -455,9 +455,15 @@ export function initLiveDetectionPage() {
     mainStart.disabled = true;
     setModelPickersDisabled(true);
     try {
+      // Model before camera: building a GPU model while the camera is open can crash mobile Chrome.
+      setModelLoading(getModelId());
+      try {
+        await loadModel(getActiveSlot());
+      } finally {
+        setModelLoading(null);
+      }
       stream = await requestCameraStream();
       setLiveDetectionActive(true);
-      await loadModel(getActiveSlot());
       backendInfo = await getObjectDetectorBackend();
       setMetric("backend", `${backendInfo.device} · ${backendInfo.dtype}`);
 
