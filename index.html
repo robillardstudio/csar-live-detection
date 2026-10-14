@@ -31,6 +31,10 @@
 
   <div class="app-layout">
     <aside id="sidebar" class="sidebar" aria-label="Live detection status">
+      <div class="sidebar__sheet-header">
+        <h2 class="sidebar__sheet-title">Details</h2>
+        <button type="button" id="btn-details-close" class="btn btn--secondary">Close</button>
+      </div>
       <div class="live-sidebar-stack">
         <section class="live-card">
           <h2 class="live-card__label">Model</h2>
@@ -81,6 +85,7 @@
         </section>
       </div>
     </aside>
+    <div id="details-backdrop" class="details-backdrop" hidden></div>
 
     <main id="main-content" class="main-content">
       <div id="live-stage" class="live-stage">
@@ -99,6 +104,28 @@
           <p class="live-stage__loading-label">Loading…</p>
         </div>
       </div>
+
+      <section class="status-strip" aria-label="Live status">
+        <dl class="status-strip__items">
+          <div class="status-strip__item">
+            <dt>Logged</dt>
+            <dd data-metric="logged">0</dd>
+          </div>
+          <div class="status-strip__item">
+            <dt>GPS</dt>
+            <dd data-metric="gps-accuracy">—</dd>
+          </div>
+          <div class="status-strip__item">
+            <dt>Heading</dt>
+            <dd data-metric="heading">—</dd>
+          </div>
+          <div class="status-strip__item">
+            <dt>FPS</dt>
+            <dd data-metric="fps">—</dd>
+          </div>
+        </dl>
+        <button type="button" id="btn-details" class="btn btn--secondary" aria-expanded="false" aria-controls="sidebar">Details</button>
+      </section>
 
       <section id="review-panel" class="review-panel hidden" aria-label="Review">
         <p id="review-empty" class="review-panel__empty hidden">No recordings yet — switch to Live and press Start Recording.</p>

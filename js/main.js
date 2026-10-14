@@ -4,9 +4,11 @@ import { initLiveDetectionPage } from "./ui/live-detection.js";
 import { initSessionSummary } from "./ui/session-summary.js";
 import { initSessionMap } from "./ui/session-map.js";
 import { initAppMode } from "./ui/app-mode.js";
+import { initDetailsSheet } from "./ui/details-sheet.js";
 
 document.addEventListener("DOMContentLoaded", () => {
   initLiveDetectionPage();
+  initDetailsSheet();
   const map = initSessionMap();
   const summary = initSessionSummary();
   if (map && summary) {

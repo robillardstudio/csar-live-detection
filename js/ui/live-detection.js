@@ -100,15 +100,15 @@ function friendlyModelLabel(modelId) {
   return label.replace(/\s*\([^)]*\)\s*$/, "");
 }
 
+function formatGpsAccuracy(fix) {
+  return fix?.accuracy == null ? "—" : `±${Math.round(fix.accuracy)}m`;
+}
+
 function formatGpsFix(fix) {
   if (!fix) {
     return "—";
   }
-  const accuracy =
-    fix.accuracy === null || fix.accuracy === undefined
-      ? "—"
-      : `±${Math.round(fix.accuracy)}m`;
-  return `${fix.lat.toFixed(8)}, ${fix.lon.toFixed(8)}\n${accuracy}`;
+  return `${fix.lat.toFixed(8)}, ${fix.lon.toFixed(8)}\n${formatGpsAccuracy(fix)}`;
 }
 
 // TEMPORARY field-test display: corrected camera heading, plus the raw inputs it came from.
@@ -220,9 +220,9 @@ export function initLiveDetectionPage() {
   let frameH = 0;
   let logGeneration = 0;
 
+  // A metric can appear in both the sidebar and the phone status strip.
   function setMetric(name, value) {
-    const target = document.querySelector(`[data-metric="${name}"]`);
-    if (target) {
+    for (const target of document.querySelectorAll(`[data-metric="${name}"]`)) {
       target.textContent = value;
     }
   }
@@ -244,6 +244,7 @@ export function initLiveDetectionPage() {
     setMetric("fps", formatMetricFps(snapshot.effectiveFps));
     setMetric("frames", String(snapshot.frameCount));
     setMetric("gps", formatGpsFix(gpsFix));
+    setMetric("gps-accuracy", formatGpsAccuracy(gpsFix));
     setMetric("logged", String(getLiveDetectionLogCount()));
   }
 
