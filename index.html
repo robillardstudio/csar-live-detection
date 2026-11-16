@@ -103,7 +103,8 @@
           </label>
           <label class="setting-field" for="setting-gemini-model">
             <span class="setting-field__label">Description model</span>
-            <input type="text" id="setting-gemini-model" class="setting-field__input" autocomplete="off" spellcheck="false">
+            <select id="setting-gemini-model" class="setting-field__input model-picker" hidden aria-label="Description model"></select>
+            <input type="text" id="setting-gemini-model-fallback" class="setting-field__input" autocomplete="off" spellcheck="false" placeholder="e.g. gemini-3.8-flash">
           </label>
         </section>
       </div>

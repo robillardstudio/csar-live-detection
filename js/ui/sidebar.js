@@ -7,7 +7,10 @@ import {
   setGeminiApiKey,
   setGeminiModelId,
 } from "../live/gemini-settings.js";
-import { clearGeminiModelCache } from "../live/gemini-client.js";
+import {
+  clearGeminiModelCache,
+  listDescriptionModels,
+} from "../live/gemini-client.js";
 
 const DEFAULT_PARAMETERS = {
   confidence: 0.5,
@@ -28,6 +31,52 @@ export function getSettings() {
   };
 }
 
+function showGeminiModelSelect(select, fallback) {
+  select.hidden = false;
+  fallback.hidden = true;
+}
+
+function showGeminiModelFallback(select, fallback) {
+  select.hidden = true;
+  fallback.hidden = false;
+  fallback.value = getGeminiModelId() || DEFAULT_GEMINI_MODEL;
+}
+
+async function refreshGeminiModelPicker(select, fallback) {
+  const key = getGeminiApiKey();
+  if (!key) {
+    showGeminiModelFallback(select, fallback);
+    return;
+  }
+  try {
+    const models = await listDescriptionModels(key);
+    if (!models.length) {
+      throw new Error("no_models");
+    }
+    const saved = getGeminiModelId() || DEFAULT_GEMINI_MODEL;
+    select.replaceChildren();
+    for (const model of models) {
+      const option = document.createElement("option");
+      option.value = model.id;
+      option.textContent = model.label;
+      select.appendChild(option);
+    }
+    if (models.some((model) => model.id === saved)) {
+      select.value = saved;
+    } else if (models.some((model) => model.id === DEFAULT_GEMINI_MODEL)) {
+      select.value = DEFAULT_GEMINI_MODEL;
+      setGeminiModelId(DEFAULT_GEMINI_MODEL);
+    } else {
+      select.value = models[0].id;
+      setGeminiModelId(models[0].id);
+    }
+    showGeminiModelSelect(select, fallback);
+  } catch (error) {
+    console.error("[GEMINI] model list failed:", error?.message || error);
+    showGeminiModelFallback(select, fallback);
+  }
+}
+
 export function initRecordingSettings() {
   const checkbox = document.getElementById("setting-show-ai-while-recording");
   if (checkbox) {
@@ -38,22 +87,32 @@ export function initRecordingSettings() {
   }
 
   const keyInput = document.getElementById("setting-gemini-api-key");
+  const modelSelect = document.getElementById("setting-gemini-model");
+  const modelFallback = document.getElementById("setting-gemini-model-fallback");
+
+  if (modelSelect && modelFallback) {
+    modelFallback.value = getGeminiModelId() || DEFAULT_GEMINI_MODEL;
+    modelSelect.addEventListener("change", () => {
+      setGeminiModelId(modelSelect.value);
+      clearGeminiModelCache();
+    });
+    modelFallback.addEventListener("change", () => {
+      setGeminiModelId(modelFallback.value);
+      modelFallback.value = getGeminiModelId();
+      clearGeminiModelCache();
+    });
+    void refreshGeminiModelPicker(modelSelect, modelFallback);
+  }
+
   if (keyInput) {
     keyInput.value = getGeminiApiKey();
     keyInput.addEventListener("change", () => {
       setGeminiApiKey(keyInput.value);
       keyInput.value = getGeminiApiKey();
       clearGeminiModelCache();
-    });
-  }
-
-  const modelInput = document.getElementById("setting-gemini-model");
-  if (modelInput) {
-    modelInput.value = getGeminiModelId() || DEFAULT_GEMINI_MODEL;
-    modelInput.addEventListener("change", () => {
-      setGeminiModelId(modelInput.value);
-      modelInput.value = getGeminiModelId();
-      clearGeminiModelCache();
+      if (modelSelect && modelFallback) {
+        void refreshGeminiModelPicker(modelSelect, modelFallback);
+      }
     });
   }
 }

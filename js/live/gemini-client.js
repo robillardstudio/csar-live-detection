@@ -158,7 +158,46 @@ function parseGeminiError(status, bodyText) {
   return `${status} ${message}`;
 }
 
-async function listModelIds(apiKey) {
+function modelIdFromName(name) {
+  return String(name || "").replace(/^models\//, "");
+}
+
+function modelAcceptsImagesAndAudio(model) {
+  const id = modelIdFromName(model.name).toLowerCase();
+  if (!id) {
+    return false;
+  }
+  // Drop embeddings, media generators, TTS, and other non-multimodal-input models.
+  if (
+    /embedding|embed-content|imagen|veo|tts|aqa-|text-embedding|gemini-embedding|nano-banana/.test(
+      id,
+    )
+  ) {
+    return false;
+  }
+  if (/-image(-|$)/.test(id)) {
+    return false;
+  }
+  if (!id.startsWith("gemini-")) {
+    return false;
+  }
+  const desc = `${model.description || ""} ${model.displayName || ""}`.toLowerCase();
+  // Prefer explicit multimodal hints when present; otherwise Gemini generateContent models qualify.
+  if (desc && /audio/.test(desc) && /image/.test(desc)) {
+    return true;
+  }
+  if (desc && (/text-only|embedding|speech synthesis/.test(desc))) {
+    return false;
+  }
+  return true;
+}
+
+function supportsGenerateContent(model) {
+  const methods = model.supportedGenerationMethods ?? [];
+  return methods.map(String).includes("generateContent");
+}
+
+async function fetchGeminiModels(apiKey) {
   const url =
     "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000";
   const response = await fetch(url, {
@@ -169,19 +208,39 @@ async function listModelIds(apiKey) {
     throw new Error(parseGeminiError(response.status, detail));
   }
   const payload = await response.json();
-  return (payload.models ?? [])
-    .map((model) => String(model.name || "").replace(/^models\//, ""))
-    .filter(Boolean);
+  return payload.models ?? [];
+}
+
+export async function listDescriptionModels(apiKey) {
+  const key = apiKey || getGeminiApiKey();
+  if (!key) {
+    throw new Error("missing_api_key");
+  }
+  const models = await fetchGeminiModels(key);
+  return models
+    .filter(supportsGenerateContent)
+    .filter(modelAcceptsImagesAndAudio)
+    .map((model) => {
+      const id = modelIdFromName(model.name);
+      const displayName = model.displayName?.trim() || id;
+      return {
+        id,
+        displayName,
+        label: `${displayName} · ${id}`,
+      };
+    })
+    .sort((a, b) => a.label.localeCompare(b.label));
 }
 
 async function ensureValidModel(modelId, apiKey) {
   if (!listedModelsPromise) {
-    listedModelsPromise = listModelIds(apiKey).catch((error) => {
+    listedModelsPromise = listDescriptionModels(apiKey).catch((error) => {
       listedModelsPromise = null;
       throw error;
     });
   }
-  const ids = await listedModelsPromise;
+  const models = await listedModelsPromise;
+  const ids = models.map((model) => model.id);
   if (ids.includes(modelId)) {
     return;
   }
