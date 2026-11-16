@@ -9,6 +9,7 @@ import {
   getObjectDetectorBackend,
   loadModel,
   MODEL_OPTIONS,
+  setDescriptionModel,
   setDetectionModel,
   setLiveDetectionActive,
 } from "../models.js";
@@ -474,6 +475,10 @@ export function initLiveDetectionPage() {
     if (!running || busy || switchingModel) {
       return;
     }
+    // Gemini (online): camera + moments only — no on-device inference.
+    if (getModelTask() === "description") {
+      return;
+    }
     // Blind moments skip inference to keep phones stable; opt-in via "Show AI while recording".
     if (isRecording && !getSettings().showAiWhileRecording) {
       return;
@@ -618,16 +623,24 @@ export function initLiveDetectionPage() {
     setModelPickersDisabled(true);
     try {
       // Model before camera: building a GPU model while the camera is open can crash mobile Chrome.
-      setModelLoading(getModelId());
-      try {
-        await loadModel(getActiveSlot());
-      } finally {
-        setModelLoading(null);
+      // Gemini (online) skips on-device loadModel — camera runs; descriptions happen after Stop.
+      if (getModelTask() !== "description") {
+        setModelLoading(getModelId());
+        try {
+          await loadModel(getActiveSlot());
+        } finally {
+          setModelLoading(null);
+        }
       }
       stream = await requestCameraStream();
       setLiveDetectionActive(true);
-      backendInfo = await getObjectDetectorBackend();
-      setMetric("backend", `${backendInfo.device} · ${backendInfo.dtype}`);
+      if (getModelTask() === "description") {
+        backendInfo = { device: "gemini", dtype: "online" };
+        setMetric("backend", "Gemini · online");
+      } else {
+        backendInfo = await getObjectDetectorBackend();
+        setMetric("backend", `${backendInfo.device} · ${backendInfo.dtype}`);
+      }
 
       metrics.reset();
       gpsFix = null;
@@ -793,25 +806,42 @@ export function initLiveDetectionPage() {
   window.addEventListener("pagehide", stopLiveDetection);
 
   async function handleModelSelect(modelId) {
+    const option = MODEL_OPTIONS.find((item) => item.id === modelId);
     switchingModel = true;
-    setModelLoading(modelId);
     setModelPickersDisabled(true);
     try {
       while (busy) {
         await new Promise((resolve) => requestAnimationFrame(resolve));
       }
-      await setDetectionModel(modelId);
-      backendInfo = await getObjectDetectorBackend();
-      setMetric("backend", `${backendInfo.device} · ${backendInfo.dtype}`);
-      mediaWrap.querySelector(".bounding-boxes")?.remove();
-      renderClassificationReadout(null);
+      if (option?.task === "description") {
+        setDescriptionModel(modelId);
+        backendInfo = { device: "gemini", dtype: "online" };
+        setMetric("backend", "Gemini · online");
+        clearAiOverlays();
+        syncModelPickers(modelId);
+        if (running) {
+          showCameraFeedback(
+            "Gemini (online) — moments described after Stop Recording",
+          );
+        }
+        return;
+      }
+      setModelLoading(modelId);
+      try {
+        await setDetectionModel(modelId);
+        backendInfo = await getObjectDetectorBackend();
+        setMetric("backend", `${backendInfo.device} · ${backendInfo.dtype}`);
+        clearAiOverlays();
+        syncModelPickers(modelId);
+      } finally {
+        setModelLoading(null);
+      }
     } catch (error) {
       console.error("[LIVE] model switch failed:", error);
       showCameraFeedback("Could not load that model");
       syncModelPickers();
     } finally {
       switchingModel = false;
-      setModelLoading(null);
       setModelPickersDisabled(false);
     }
   }

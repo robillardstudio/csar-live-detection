@@ -20,9 +20,10 @@ const inFlight = new Set();
 let pumping = false;
 
 function overallStatus(recording) {
-  const statuses = [recording.transcript_status, recording.description_status].filter(
-    (status) => status && status !== "skipped",
-  );
+  const statuses = [
+    recording.transcript_status,
+    recording.description_status,
+  ].filter((status) => status && status !== "skipped");
   if (!statuses.length) {
     return "skipped";
   }
@@ -45,16 +46,22 @@ function syncOverall(recordingId) {
   });
 }
 
+function formatJobError(error) {
+  return error?.message || String(error) || "request_failed";
+}
+
 async function runTranscript(recording) {
   if (!recording.audio_blob) {
     patchRecordingAnnotation(recording.recording_id, {
       transcript: null,
       transcript_status: "skipped",
+      transcript_error: null,
     });
     return;
   }
   patchRecordingAnnotation(recording.recording_id, {
     transcript_status: "pending",
+    transcript_error: null,
     annotation_status: "pending",
   });
   try {
@@ -65,11 +72,14 @@ async function runTranscript(recording) {
     patchRecordingAnnotation(recording.recording_id, {
       transcript,
       transcript_status: "done",
+      transcript_error: null,
     });
   } catch (error) {
+    const message = formatJobError(error);
+    console.error("[GEMINI] transcript failed:", message);
     patchRecordingAnnotation(recording.recording_id, {
       transcript_status: "failed",
-      transcript_error: error?.message ?? "transcript_failed",
+      transcript_error: message,
     });
   }
 }
@@ -80,12 +90,14 @@ async function runDescription(recording) {
     patchRecordingAnnotation(recording.recording_id, {
       ai_description: null,
       description_status: "skipped",
+      description_error: null,
     });
     return;
   }
   const modelId = getGeminiModelId();
   patchRecordingAnnotation(recording.recording_id, {
     description_status: "pending",
+    description_error: null,
     description_model: modelId,
     description_prompt: DESCRIPTION_PROMPT,
     annotation_status: "pending",
@@ -95,14 +107,17 @@ async function runDescription(recording) {
     patchRecordingAnnotation(recording.recording_id, {
       ai_description,
       description_status: "done",
+      description_error: null,
       description_model: modelId,
       description_prompt: DESCRIPTION_PROMPT,
       description_timestamp: Date.now(),
     });
   } catch (error) {
+    const message = formatJobError(error);
+    console.error("[GEMINI] description failed:", message);
     patchRecordingAnnotation(recording.recording_id, {
       description_status: "failed",
-      description_error: error?.message ?? "description_failed",
+      description_error: message,
     });
   }
 }
@@ -119,7 +134,8 @@ async function processItem(recordingId) {
     patchRecordingAnnotation(recordingId, {
       annotation_status: "failed",
       transcript_status: recording.audio_blob ? "failed" : "skipped",
-      description_status: (recording.frames?.length ?? 0) > 0 ? "failed" : "skipped",
+      description_status:
+        (recording.frames?.length ?? 0) > 0 ? "failed" : "skipped",
       transcript_error: "missing_api_key",
       description_error: "missing_api_key",
     });
@@ -129,12 +145,13 @@ async function processItem(recordingId) {
   inFlight.add(recordingId);
   try {
     // Independent calls — never share inputs or await in a chain that passes text across.
+    const fresh = getRecordingById(recordingId) ?? recording;
     const jobs = [];
-    if (recording.transcript_status !== "done") {
-      jobs.push(runTranscript(recording));
+    if (fresh.transcript_status !== "done") {
+      jobs.push(runTranscript(fresh));
     }
-    if (recording.description_status !== "done") {
-      jobs.push(runDescription(recording));
+    if (fresh.description_status !== "done") {
+      jobs.push(runDescription(fresh));
     }
     await Promise.all(jobs);
     syncOverall(recordingId);
@@ -150,14 +167,15 @@ async function pump() {
   pumping = true;
   try {
     while (queue.length) {
-      if (!navigator.onLine) {
-        break;
-      }
       const recordingId = queue.shift();
       await processItem(recordingId);
     }
   } finally {
     pumping = false;
+    // Drain anything enqueued while this pump was winding down.
+    if (queue.length) {
+      void pump();
+    }
   }
 }
 
@@ -166,26 +184,24 @@ export function enqueueMomentAnnotation(recordingId, { force = false } = {}) {
   if (!recording) {
     return;
   }
-  if (force) {
-    patchRecordingAnnotation(recordingId, {
-      transcript_status: recording.audio_blob ? "pending" : "skipped",
-      description_status:
-        (recording.frames?.length ?? 0) > 0 ? "pending" : "skipped",
-      annotation_status: "pending",
-      transcript_error: null,
-      description_error: null,
-    });
-  } else {
-    patchRecordingAnnotation(recordingId, {
-      transcript_status: recording.audio_blob ? "pending" : "skipped",
-      description_status:
-        (recording.frames?.length ?? 0) > 0 ? "pending" : "skipped",
-      annotation_status: "pending",
-    });
-  }
+  patchRecordingAnnotation(recordingId, {
+    transcript_status: recording.audio_blob ? "pending" : "skipped",
+    description_status:
+      (recording.frames?.length ?? 0) > 0 ? "pending" : "skipped",
+    annotation_status: "pending",
+    transcript_error: null,
+    description_error: null,
+  });
   if (!queue.includes(recordingId)) {
     queue.push(recordingId);
   }
+  console.log(
+    "[GEMINI] enqueue recording",
+    recordingId,
+    force ? "(retry)" : "",
+    "queue=",
+    queue.length,
+  );
   void pump();
 }
 
@@ -198,7 +214,7 @@ export function initMomentAnnotate() {
     for (const recording of getRecordings()) {
       const status = recording.annotation_status;
       if (status === "pending" || status === "failed") {
-        if (!queue.includes(recording.recording_id)) {
+        if (!queue.includes(recording.recording_id) && !inFlight.has(recording.recording_id)) {
           queue.push(recording.recording_id);
         }
       }

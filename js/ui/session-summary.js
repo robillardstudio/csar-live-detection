@@ -331,7 +331,7 @@ function renderMomentCard(recording, takenAt) {
     live.transcript_status === "pending"
       ? "Transcribing…"
       : live.transcript_status === "failed"
-        ? "Transcript failed."
+        ? `Failed: ${live.transcript_error || "transcript failed"}`
         : live.transcript || "—";
   youSaid.append(youLabel, youText);
 
@@ -344,7 +344,7 @@ function renderMomentCard(recording, takenAt) {
     live.description_status === "pending"
       ? "Describing…"
       : live.description_status === "failed"
-        ? "Description failed."
+        ? `Failed: ${live.description_error || "description failed"}`
         : live.ai_description || "—";
   aiSaid.append(aiLabel, aiText);
 

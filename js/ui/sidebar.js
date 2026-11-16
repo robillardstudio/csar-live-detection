@@ -7,7 +7,7 @@ import {
   setGeminiApiKey,
   setGeminiModelId,
 } from "../live/gemini-settings.js";
-import { showCameraFeedback } from "../utils/camera.js";
+import { clearGeminiModelCache } from "../live/gemini-client.js";
 
 const DEFAULT_PARAMETERS = {
   confidence: 0.5,
@@ -43,6 +43,7 @@ export function initRecordingSettings() {
     keyInput.addEventListener("change", () => {
       setGeminiApiKey(keyInput.value);
       keyInput.value = getGeminiApiKey();
+      clearGeminiModelCache();
     });
   }
 
@@ -52,6 +53,7 @@ export function initRecordingSettings() {
     modelInput.addEventListener("change", () => {
       setGeminiModelId(modelInput.value);
       modelInput.value = getGeminiModelId();
+      clearGeminiModelCache();
     });
   }
 }
@@ -93,10 +95,8 @@ export function initModelPicker(onSelect) {
       }
       if (option.task === "description") {
         recordingSettings.descriptionSource = option.id;
-        syncModelPickers(getModelId());
-        showCameraFeedback(
-          "Gemini (online) describes moments after Stop Recording",
-        );
+        syncModelPickers(select.value);
+        onSelect?.(select.value);
         return;
       }
       syncModelPickers(select.value);

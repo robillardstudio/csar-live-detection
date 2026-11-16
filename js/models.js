@@ -28,6 +28,18 @@ export function getActiveSlot() {
   return getModelTask() === "classification" ? "classifier" : "objectDetector";
 }
 
+// Select Gemini (online) without loading an on-device Transformers pipeline.
+export function setDescriptionModel(modelId) {
+  const option = MODEL_OPTIONS.find(
+    (item) => item.id === modelId && item.enabled && item.task === "description",
+  );
+  if (!option) {
+    throw new Error(`Unsupported description model: ${modelId}`);
+  }
+  MODEL_ID = modelId;
+  return option;
+}
+
 let liveDetectionActive = false;
 
 export function setLiveDetectionActive(active) {
