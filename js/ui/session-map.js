@@ -1,4 +1,6 @@
 // On-demand map of the walked GPS path and detections from the in-memory detection log. Read-only.
+import { formatClockTime } from "../utils/time.js";
+
 const LEAFLET_CSS =
   "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
 const LEAFLET_JS =
@@ -175,6 +177,54 @@ function extractPaths(rows) {
       points: extractPath(groupRows),
     }))
     .filter((item) => item.points.length > 0);
+}
+
+function pointsFromTrack(track) {
+  const path = [];
+  for (const point of track ?? []) {
+    const lat = Number(point.lat);
+    const lon = Number(point.lon);
+    if (!isValidCoordinate(lat, lon)) {
+      continue;
+    }
+    const last = path.at(-1);
+    if (last && last[0] === lat && last[1] === lon) {
+      continue;
+    }
+    path.push([lat, lon]);
+  }
+  return path;
+}
+
+function pathForRecording(recording) {
+  const fromTrack = pointsFromTrack(recording.track);
+  if (fromTrack.length) {
+    return fromTrack;
+  }
+  const start = recording.start_gps;
+  if (start != null) {
+    const lat = Number(start.lat);
+    const lon = Number(start.lon);
+    if (isValidCoordinate(lat, lon)) {
+      return [[lat, lon]];
+    }
+  }
+  return [];
+}
+
+// Prefer per-recording GPS tracks; fall back to detection-row GPS for older sessions.
+function extractRecordingPaths(recordings, rows) {
+  const fromTracks = (recordings ?? [])
+    .map((recording) => ({
+      recordingId: recording.recording_id,
+      points: pathForRecording(recording),
+      recording,
+    }))
+    .filter((item) => item.points.length > 0);
+  if (fromTracks.length) {
+    return fromTracks;
+  }
+  return extractPaths(rows).map((item) => ({ ...item, recording: null }));
 }
 
 // Fixed colors first, then FNV-1a over the label name, so a label keeps its color across sessions.
@@ -394,12 +444,24 @@ function pathStyle(index) {
   return index < PATH_PALETTE.length ? { color } : { color, dashArray: "8 6" };
 }
 
+function momentStartLatLng(recording, points) {
+  const start = recording?.start_gps;
+  if (start != null) {
+    const lat = Number(start.lat);
+    const lon = Number(start.lon);
+    if (isValidCoordinate(lat, lon)) {
+      return [lat, lon];
+    }
+  }
+  return points[0] ?? null;
+}
+
 function drawPaths(L, paths, accent) {
   const layer = L.layerGroup();
   const named = paths.length > 1;
   const recordings = [];
 
-  paths.forEach(({ recordingId, points }, index) => {
+  paths.forEach(({ recordingId, points, recording }, index) => {
     const name = `Recording ${recordingId}`;
     const prefix = named ? `${name} · ` : "";
     const style = named ? pathStyle(index) : { color: accent };
@@ -429,6 +491,26 @@ function drawPaths(L, paths, accent) {
         fill: false,
       })
         .bindTooltip(`${prefix}End`)
+        .addTo(layer);
+    }
+
+    const momentAt = momentStartLatLng(recording, points);
+    if (momentAt && recording) {
+      const label = `Recording ${recording.recording_id} · ${formatClockTime(recording.start_time)}`;
+      L.circleMarker(momentAt, {
+        pane: "mapPath",
+        radius: 6,
+        color: style.color ?? accent,
+        weight: 2,
+        fillColor: "#ffffff",
+        fillOpacity: 1,
+      })
+        .bindTooltip(label, {
+          permanent: true,
+          direction: "top",
+          offset: [0, -8],
+          className: "map-moment-label",
+        })
         .addTo(layer);
     }
 
@@ -659,7 +741,7 @@ export function initSessionMap() {
   async function open(selection) {
     const generation = ++openGeneration;
     const rows = selection.rows;
-    const paths = extractPaths(rows);
+    const paths = extractRecordingPaths(selection.recordings, rows);
     const path = paths.flatMap((item) => item.points);
     snapshot = {
       viewer: extractDetectionPoints(rows, viewerPosition),

@@ -46,6 +46,7 @@ export function startRecording(modelId, { startGps = null } = {}) {
     audio_mime: null,
     duration_ms: null,
     frames: [],
+    track: [],
     start_gps: startGps,
     end_gps: null,
   };
@@ -57,6 +58,43 @@ export function addRecordingFrame(frame) {
   if (activeRecording) {
     activeRecording.frames.push(frame);
   }
+}
+
+export function addTrackPoint(point) {
+  if (activeRecording) {
+    activeRecording.track.push(point);
+  }
+}
+
+// Great-circle length of a recording track in meters.
+export function trackDistanceMeters(track) {
+  if (!track?.length) {
+    return 0;
+  }
+  const toRad = (degrees) => (degrees * Math.PI) / 180;
+  const R = 6371000;
+  let sum = 0;
+  for (let i = 1; i < track.length; i += 1) {
+    const a = track[i - 1];
+    const b = track[i];
+    if (
+      a?.lat == null ||
+      a?.lon == null ||
+      b?.lat == null ||
+      b?.lon == null
+    ) {
+      continue;
+    }
+    const dLat = toRad(b.lat - a.lat);
+    const dLon = toRad(b.lon - a.lon);
+    const lat1 = toRad(a.lat);
+    const lat2 = toRad(b.lat);
+    const h =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+    sum += 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+  return sum;
 }
 
 // Ends the active recording and attaches audio / end GPS when provided.
@@ -84,10 +122,21 @@ export function markRecordingsExported(recordingId) {
   }
 }
 
+function recordingHasExportableData(recording) {
+  return (
+    recording.row_count > 0 ||
+    (recording.frames?.length ?? 0) > 0 ||
+    (recording.track?.length ?? 0) > 0 ||
+    Boolean(recording.audio_blob) ||
+    recording.end_time != null
+  );
+}
+
 export function getUnexportedRecordingCount() {
   return recordings.filter(
     (recording) =>
-      recording.row_count > 0 && !exportedIds.has(recording.recording_id),
+      recordingHasExportableData(recording) &&
+      !exportedIds.has(recording.recording_id),
   ).length;
 }
 

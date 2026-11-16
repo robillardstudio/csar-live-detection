@@ -22,6 +22,7 @@ import {
 } from "../utils/position.js";
 import {
   addRecordingFrame,
+  addTrackPoint,
   clearLiveDetectionLog,
   getLiveDetectionLogCount,
   getRecordings,
@@ -242,6 +243,8 @@ export function initLiveDetectionPage() {
   let isRecording = false;
   let recordStartedAt = 0;
   let recordTimerId = null;
+  let trackTimerId = null;
+  const TRACK_INTERVAL_MS = 2000;
   let animationFrameId = null;
   let lastCompletedInferenceAt = 0;
   let frameW = 0;
@@ -326,6 +329,33 @@ export function initLiveDetectionPage() {
     recordTimerId = window.setInterval(tick, 250);
   }
 
+  function logGpsTrackPoint() {
+    const fix = gps?.getFix() ?? gpsFix;
+    if (fix?.lat == null || fix?.lon == null) {
+      return;
+    }
+    addTrackPoint({
+      timestamp: Date.now(),
+      lat: fix.lat,
+      lon: fix.lon,
+      accuracy: fix.accuracy ?? null,
+      heading: compass?.getReading()?.cameraHeading ?? null,
+    });
+  }
+
+  function stopTrackLogging() {
+    if (trackTimerId != null) {
+      clearInterval(trackTimerId);
+      trackTimerId = null;
+    }
+  }
+
+  function startTrackLogging() {
+    stopTrackLogging();
+    logGpsTrackPoint();
+    trackTimerId = window.setInterval(logGpsTrackPoint, TRACK_INTERVAL_MS);
+  }
+
   function renderClassificationReadout(predictions) {
     const readout = document.getElementById("class-readout");
     if (!readout) {
@@ -376,6 +406,7 @@ export function initLiveDetectionPage() {
       clearAiOverlays();
     }
     startRecordTimer();
+    startTrackLogging();
     updateControls();
     const { mic } = await momentRecorder.start();
     if (!mic.ok) {
@@ -389,6 +420,8 @@ export function initLiveDetectionPage() {
     }
     isRecording = false;
     stopRecordTimer();
+    stopTrackLogging();
+    logGpsTrackPoint();
     const audio = await momentRecorder.stop();
     const done = stopRecording({
       audio_blob: audio.audio_blob,
@@ -653,7 +686,7 @@ export function initLiveDetectionPage() {
     if (exporter(exportBackend, recordingId)) {
       markRecordingsExported(recordingId);
     } else {
-      showCameraFeedback("Nothing to export — no rows in this selection");
+      showCameraFeedback("Nothing to export — no recordings in this selection");
     }
   }
 
@@ -673,6 +706,7 @@ export function initLiveDetectionPage() {
       if (isRecording) {
         isRecording = false;
         stopRecordTimer();
+        stopTrackLogging();
         await momentRecorder.cancel();
       }
       logGeneration += 1;

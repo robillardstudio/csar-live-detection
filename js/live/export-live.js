@@ -131,22 +131,26 @@ export function exportLiveDetectionCsv(backendInfo, recordingId) {
   return true;
 }
 
+function serializeRecording(item) {
+  const { audio_blob, frames, ...rest } = item;
+  return {
+    ...rest,
+    has_audio: Boolean(audio_blob),
+    frame_count: frames?.length ?? 0,
+    frames: (frames ?? []).map(({ jpeg, ...meta }) => meta),
+    track: item.track ?? [],
+  };
+}
+
 export function exportLiveDetectionJson(backendInfo, recordingId) {
   const rows = getRecordingRows(recordingId);
-  if (!rows.length) {
+  const recordings = getRecordings()
+    .filter((item) => recordingId == null || item.recording_id === recordingId)
+    .map(serializeRecording);
+  if (!rows.length && !recordings.length) {
     return false;
   }
 
-  const recordings = getRecordings()
-    .filter((item) => recordingId == null || item.recording_id === recordingId)
-    .map((item) => {
-      const { audio_blob, frames, ...rest } = item;
-      return {
-        ...rest,
-        has_audio: Boolean(audio_blob),
-        frame_count: frames?.length ?? 0,
-      };
-    });
   const payload = {
     ...buildMetadata(rows, backendInfo),
     recordings,

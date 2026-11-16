@@ -1,5 +1,8 @@
 // On-demand snapshot of the in-memory detection log. Does not record, detect, or export.
-import { recordingDurationMs } from "../live/detection-log.js";
+import {
+  recordingDurationMs,
+  trackDistanceMeters,
+} from "../live/detection-log.js";
 import { formatClockTime } from "../utils/time.js";
 import { playRecordingAudio } from "./app-mode.js";
 
@@ -109,7 +112,24 @@ function summarizeDetectionLog(rows) {
   };
 }
 
+function formatDistance(meters) {
+  if (!Number.isFinite(meters) || meters <= 0) {
+    return "—";
+  }
+  if (meters < 1000) {
+    return `${Math.round(meters)} m`;
+  }
+  return `${(meters / 1000).toFixed(2)} km`;
+}
+
 function summaryParagraph(stats, subject) {
+  if (stats.detections === 0) {
+    return (
+      `${subject} captured ${countLabel(stats.moments, "moment", "moments")} ` +
+      `with ${countLabel(stats.captureFrames, "frame", "frames")} over ${formatDuration(stats.durationMs)}. ` +
+      `No live detections were logged (inference may have been paused while recording).`
+    );
+  }
   return (
     `${subject} logged ${countLabel(stats.detections, "detection", "detections")} ` +
     `across ${countLabel(stats.frames, "frame", "frames")} over ${formatDuration(stats.durationMs)}, ` +
@@ -226,19 +246,17 @@ function renderSummary(stats, subject) {
 }
 
 function renderRecordingsTable(section, body, selection) {
-  section.classList.toggle("hidden", !selection.all);
+  const moments = selection.recordings ?? [];
+  section.classList.toggle("hidden", moments.length === 0);
   body.replaceChildren();
-  if (!selection.all) {
-    return;
-  }
-  for (const recording of selection.recordings) {
+  for (const recording of moments) {
     const id = recording.recording_id;
     const cells = [
       recording.end_time == null ? `${id} (in progress)` : String(id),
       formatClockTime(recording.start_time),
       formatDuration(recordingDurationMs(recording, selection.takenAt)),
-      String(recording.row_count),
-      recording.model ?? "—",
+      formatDistance(trackDistanceMeters(recording.track)),
+      String(recording.frames?.length ?? 0),
     ];
     const row = document.createElement("tr");
     for (const text of cells) {
@@ -280,28 +298,42 @@ export function initSessionSummary() {
   async function open(selection) {
     const generation = ++openGeneration;
     const rows = selection.rows;
+    const moments = selection.recordings ?? [];
     panel.scrollTop = 0;
 
-    const hasRows = rows.length > 0;
-    empty.classList.toggle("hidden", hasRows);
-    content.classList.toggle("hidden", !hasRows);
-    if (!hasRows) {
+    const hasContent = rows.length > 0 || moments.length > 0;
+    empty.classList.toggle("hidden", hasContent);
+    content.classList.toggle("hidden", !hasContent);
+    if (!hasContent) {
       destroyChart();
       return;
     }
 
     const stats = summarizeDetectionLog(rows);
     // Start-to-stop time of each recording, so gaps between recordings don't count.
-    stats.durationMs = selection.recordings.reduce(
+    stats.durationMs = moments.reduce(
       (sum, recording) =>
         sum + recordingDurationMs(recording, selection.takenAt),
       0,
     );
+    stats.moments = moments.length;
+    stats.captureFrames = moments.reduce(
+      (sum, recording) => sum + (recording.frames?.length ?? 0),
+      0,
+    );
+    if (rows.length === 0) {
+      stats.frames = stats.captureFrames;
+    }
     renderSummary(stats, selection.all ? "These recordings" : "This recording");
     renderRecordingsTable(recordingsSection, recordingsBody, selection);
     if (chartNote) {
       chartNote.textContent = "";
       chartNote.classList.add("hidden");
+    }
+
+    if (stats.topLabels.length === 0) {
+      destroyChart();
+      return;
     }
 
     try {
