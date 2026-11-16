@@ -153,8 +153,14 @@ export function exportLiveDetectionCsv(backendInfo, recordingId) {
 }
 
 function serializeRecording(item) {
-  const { audio_blob, frames, transcript_error, description_error, ...rest } =
-    item;
+  const {
+    audio_blob,
+    frames,
+    transcript_error,
+    description_error,
+    analysis_error,
+    ...rest
+  } = item;
   return {
     ...rest,
     has_audio: Boolean(audio_blob),
@@ -165,6 +171,8 @@ function serializeRecording(item) {
     ai_description: item.ai_description ?? null,
     description_model: item.description_model ?? null,
     description_prompt: item.description_prompt ?? null,
+    analysis: item.analysis ?? null,
+    analysis_status: item.analysis_status ?? null,
   };
 }
 

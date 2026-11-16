@@ -9,6 +9,50 @@ export const TRANSCRIPT_PROMPT =
 export const DESCRIPTION_PROMPT =
   "Describe this scene as you see it, in 2–3 sentences. Mention what is there and what is happening.";
 
+export const ANALYSIS_CATEGORIES = [
+  "objects",
+  "activity",
+  "condition",
+  "weather",
+  "sound",
+  "smell",
+  "feeling",
+  "memory",
+];
+
+export const ANALYSIS_STATUSES = [
+  "shared",
+  "partly",
+  "overlooked",
+  "beyond",
+];
+
+export const ANALYSIS_METHOD = "AI-assisted coding";
+
+export const ANALYSIS_PROMPT = `You compare two accounts of the same moment.
+The transcript is what the person said (recorded blind). The AI description is from camera frames only — do not invent content from either.
+
+Return JSON only with this shape:
+{
+  "observations": [
+    { "text": "short phrase from the transcript", "category": "objects|activity|condition|weather|sound|smell|feeling|memory", "status": "shared|partly|overlooked|beyond" }
+  ],
+  "ai_only": [
+    { "text": "short phrase from the AI description", "category": "objects|activity|condition|weather|sound|smell|feeling|memory" }
+  ]
+}
+
+Rules:
+- Split the transcript into short atomic observations. Keep the person's wording; do not paraphrase.
+- category must be one of: objects, activity, condition, weather, sound, smell, feeling, memory.
+- status vs the AI description:
+  - shared: clearly mentioned in the AI description
+  - partly: only partly / weakly reflected
+  - overlooked: could reasonably be seen in the frames but the AI description did not mention it
+  - beyond: not visual (sound, smell, feeling, memory, and most weather)
+- ai_only: observations present in the AI description that the person did not mention.
+- If one side is empty, return empty arrays as appropriate.`;
+
 export function getGeminiApiKey() {
   try {
     return localStorage.getItem(KEY_STORAGE)?.trim() || "";

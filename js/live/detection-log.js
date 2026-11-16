@@ -63,6 +63,10 @@ export function startRecording(modelId, { startGps = null } = {}) {
     description_model: null,
     description_prompt: null,
     description_timestamp: null,
+    analysis: null,
+    analysis_status: null,
+    analysis_error: null,
+    analysis_timestamp: null,
     annotation_status: null,
   };
   recordings.push(activeRecording);

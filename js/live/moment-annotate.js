@@ -1,4 +1,5 @@
-// Background queue: independent transcript + description jobs per moment (never cross inputs).
+// Background queue: independent transcript + description jobs per moment (never cross inputs),
+// then a text-only compare once both accounts exist.
 
 import {
   getRecordingById,
@@ -6,10 +7,12 @@ import {
   patchRecordingAnnotation,
 } from "./detection-log.js";
 import {
+  compareAccounts,
   describeFrames,
   transcribeAudioBlob,
 } from "./gemini-client.js";
 import {
+  ANALYSIS_METHOD,
   DESCRIPTION_PROMPT,
   getGeminiModelId,
   hasGeminiApiKey,
@@ -17,12 +20,14 @@ import {
 
 const queue = [];
 const inFlight = new Set();
+const followUp = new Map(); // recordingId → { analysisOnly } if enqueued while in flight
 let pumping = false;
 
 function overallStatus(recording) {
   const statuses = [
     recording.transcript_status,
     recording.description_status,
+    recording.analysis_status,
   ].filter((status) => status && status !== "skipped");
   if (!statuses.length) {
     return "skipped";
@@ -48,6 +53,34 @@ function syncOverall(recordingId) {
 
 function formatJobError(error) {
   return error?.message || String(error) || "request_failed";
+}
+
+function hasBothAccounts(recording) {
+  return (
+    recording?.transcript_status === "done" &&
+    recording?.description_status === "done" &&
+    Boolean(String(recording.transcript ?? "").trim()) &&
+    Boolean(String(recording.ai_description ?? "").trim())
+  );
+}
+
+function enqueueJob(recordingId, { analysisOnly = false } = {}) {
+  if (inFlight.has(recordingId)) {
+    const prev = followUp.get(recordingId);
+    followUp.set(recordingId, {
+      analysisOnly: prev ? prev.analysisOnly && analysisOnly : analysisOnly,
+    });
+    return;
+  }
+  const existing = queue.find((item) => item.recordingId === recordingId);
+  if (existing) {
+    // Full annotate supersedes analysis-only; analysis-only upgrades nothing.
+    if (!analysisOnly) {
+      existing.analysisOnly = false;
+    }
+    return;
+  }
+  queue.push({ recordingId, analysisOnly });
 }
 
 async function runTranscript(recording) {
@@ -122,7 +155,48 @@ async function runDescription(recording) {
   }
 }
 
-async function processItem(recordingId) {
+async function runAnalysis(recording) {
+  if (!hasBothAccounts(recording)) {
+    patchRecordingAnnotation(recording.recording_id, {
+      analysis: null,
+      analysis_status: "skipped",
+      analysis_error: null,
+    });
+    return;
+  }
+  const modelId = getGeminiModelId();
+  patchRecordingAnnotation(recording.recording_id, {
+    analysis_status: "pending",
+    analysis_error: null,
+    annotation_status: "pending",
+  });
+  try {
+    const result = await compareAccounts(
+      recording.transcript,
+      recording.ai_description,
+    );
+    patchRecordingAnnotation(recording.recording_id, {
+      analysis: {
+        model: modelId,
+        method: ANALYSIS_METHOD,
+        observations: result.observations,
+        ai_only: result.ai_only,
+      },
+      analysis_status: "done",
+      analysis_error: null,
+      analysis_timestamp: Date.now(),
+    });
+  } catch (error) {
+    const message = formatJobError(error);
+    console.error("[GEMINI] analysis failed:", message);
+    patchRecordingAnnotation(recording.recording_id, {
+      analysis_status: "failed",
+      analysis_error: message,
+    });
+  }
+}
+
+async function processItem(recordingId, { analysisOnly = false } = {}) {
   if (inFlight.has(recordingId)) {
     return;
   }
@@ -136,27 +210,59 @@ async function processItem(recordingId) {
       transcript_status: recording.audio_blob ? "failed" : "skipped",
       description_status:
         (recording.frames?.length ?? 0) > 0 ? "failed" : "skipped",
+      analysis_status: "failed",
       transcript_error: "missing_api_key",
       description_error: "missing_api_key",
+      analysis_error: "missing_api_key",
     });
     return;
   }
 
   inFlight.add(recordingId);
   try {
-    // Independent calls — never share inputs or await in a chain that passes text across.
-    const fresh = getRecordingById(recordingId) ?? recording;
-    const jobs = [];
-    if (fresh.transcript_status !== "done") {
-      jobs.push(runTranscript(fresh));
+    if (!analysisOnly) {
+      // Independent calls — never share inputs or await in a chain that passes text across.
+      const fresh = getRecordingById(recordingId) ?? recording;
+      const jobs = [];
+      if (fresh.transcript_status !== "done") {
+        jobs.push(runTranscript(fresh));
+      }
+      if (fresh.description_status !== "done") {
+        jobs.push(runDescription(fresh));
+      }
+      await Promise.all(jobs);
     }
-    if (fresh.description_status !== "done") {
-      jobs.push(runDescription(fresh));
+
+    const after = getRecordingById(recordingId) ?? recording;
+    if (
+      analysisOnly ||
+      after.analysis_status !== "done" ||
+      !after.analysis
+    ) {
+      if (hasBothAccounts(after) || analysisOnly) {
+        await runAnalysis(after);
+      } else if (
+        after.transcript_status &&
+        after.transcript_status !== "pending" &&
+        after.description_status &&
+        after.description_status !== "pending" &&
+        after.analysis_status !== "done"
+      ) {
+        patchRecordingAnnotation(recordingId, {
+          analysis: null,
+          analysis_status: "skipped",
+          analysis_error: null,
+        });
+      }
     }
-    await Promise.all(jobs);
     syncOverall(recordingId);
   } finally {
     inFlight.delete(recordingId);
+    const next = followUp.get(recordingId);
+    if (next) {
+      followUp.delete(recordingId);
+      enqueueJob(recordingId, next);
+    }
   }
 }
 
@@ -167,8 +273,10 @@ async function pump() {
   pumping = true;
   try {
     while (queue.length) {
-      const recordingId = queue.shift();
-      await processItem(recordingId);
+      const job = queue.shift();
+      await processItem(job.recordingId, {
+        analysisOnly: Boolean(job.analysisOnly),
+      });
     }
   } finally {
     pumping = false;
@@ -188,13 +296,14 @@ export function enqueueMomentAnnotation(recordingId, { force = false } = {}) {
     transcript_status: recording.audio_blob ? "pending" : "skipped",
     description_status:
       (recording.frames?.length ?? 0) > 0 ? "pending" : "skipped",
+    analysis_status: "pending",
     annotation_status: "pending",
     transcript_error: null,
     description_error: null,
+    analysis_error: null,
+    ...(force ? { analysis: null } : {}),
   });
-  if (!queue.includes(recordingId)) {
-    queue.push(recordingId);
-  }
+  enqueueJob(recordingId, { analysisOnly: false });
   console.log(
     "[GEMINI] enqueue recording",
     recordingId,
@@ -209,13 +318,38 @@ export function retryMomentAnnotation(recordingId) {
   enqueueMomentAnnotation(recordingId, { force: true });
 }
 
+export function enqueueMomentAnalysis(recordingId) {
+  const recording = getRecordingById(recordingId);
+  if (!recording || !hasBothAccounts(recording)) {
+    return;
+  }
+  patchRecordingAnnotation(recordingId, {
+    analysis: null,
+    analysis_status: "pending",
+    analysis_error: null,
+    annotation_status: "pending",
+  });
+  enqueueJob(recordingId, { analysisOnly: true });
+  console.log("[GEMINI] enqueue analysis", recordingId, "queue=", queue.length);
+  void pump();
+}
+
+export function reanalyseMoment(recordingId) {
+  enqueueMomentAnalysis(recordingId);
+}
+
 export function initMomentAnnotate() {
   window.addEventListener("online", () => {
     for (const recording of getRecordings()) {
       const status = recording.annotation_status;
       if (status === "pending" || status === "failed") {
-        if (!queue.includes(recording.recording_id) && !inFlight.has(recording.recording_id)) {
-          queue.push(recording.recording_id);
+        if (!inFlight.has(recording.recording_id)) {
+          const analysisOnly =
+            recording.transcript_status === "done" &&
+            recording.description_status === "done" &&
+            (recording.analysis_status === "pending" ||
+              recording.analysis_status === "failed");
+          enqueueJob(recording.recording_id, { analysisOnly });
         }
       }
     }

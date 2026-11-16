@@ -1,6 +1,9 @@
 // Gemini generateContent helpers. Callers pass the API key; this module never logs it.
 
 import {
+  ANALYSIS_CATEGORIES,
+  ANALYSIS_PROMPT,
+  ANALYSIS_STATUSES,
   DESCRIPTION_PROMPT,
   getGeminiApiKey,
   getGeminiModelId,
@@ -255,7 +258,7 @@ export function clearGeminiModelCache() {
   listedModelsPromise = null;
 }
 
-async function generateContent({ modelId, parts, apiKey }) {
+async function generateContent({ modelId, parts, apiKey, generationConfig }) {
   const model = modelId || getGeminiModelId();
   const key = apiKey || getGeminiApiKey();
   if (!key) {
@@ -276,6 +279,7 @@ async function generateContent({ modelId, parts, apiKey }) {
       },
       body: JSON.stringify({
         contents: [{ role: "user", parts }],
+        ...(generationConfig ? { generationConfig } : {}),
       }),
       signal: controller.signal,
     });
@@ -361,4 +365,78 @@ export async function describeFrames(frames) {
     modelId: getGeminiModelId(),
     parts: [{ text: DESCRIPTION_PROMPT }, ...imageParts],
   });
+}
+
+function parseJsonPayload(text) {
+  const raw = String(text ?? "").trim();
+  if (!raw) {
+    throw new Error("empty_analysis");
+  }
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = (fenced ? fenced[1] : raw).trim();
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    const start = candidate.indexOf("{");
+    const end = candidate.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      return JSON.parse(candidate.slice(start, end + 1));
+    }
+    throw new Error("invalid_analysis_json");
+  }
+}
+
+function normalizeCategory(value) {
+  const key = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  return ANALYSIS_CATEGORIES.includes(key) ? key : "objects";
+}
+
+function normalizeStatus(value) {
+  const key = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  return ANALYSIS_STATUSES.includes(key) ? key : "partly";
+}
+
+function normalizeAnalysisResult(payload) {
+  const observations = Array.isArray(payload?.observations)
+    ? payload.observations
+    : [];
+  const aiOnly = Array.isArray(payload?.ai_only) ? payload.ai_only : [];
+  return {
+    observations: observations
+      .map((item) => ({
+        text: String(item?.text ?? "").trim(),
+        category: normalizeCategory(item?.category),
+        status: normalizeStatus(item?.status),
+      }))
+      .filter((item) => item.text),
+    ai_only: aiOnly
+      .map((item) => ({
+        text: String(item?.text ?? "").trim(),
+        category: normalizeCategory(item?.category),
+      }))
+      .filter((item) => item.text),
+  };
+}
+
+// Text-only compare of transcript vs ai_description (same selected model).
+export async function compareAccounts(transcript, aiDescription) {
+  const text = await generateContent({
+    modelId: getGeminiModelId(),
+    parts: [
+      {
+        text:
+          `${ANALYSIS_PROMPT}\n\n` +
+          `TRANSCRIPT:\n${String(transcript ?? "").trim() || "(empty)"}\n\n` +
+          `AI_DESCRIPTION:\n${String(aiDescription ?? "").trim() || "(empty)"}`,
+      },
+    ],
+    generationConfig: {
+      responseMimeType: "application/json",
+    },
+  });
+  return normalizeAnalysisResult(parseJsonPayload(text));
 }

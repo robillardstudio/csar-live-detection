@@ -2,13 +2,28 @@
 import {
   getRecordingById,
   onRecordingUpdated,
+  patchRecordingAnnotation,
   recordingDurationMs,
   trackDistanceMeters,
 } from "../live/detection-log.js";
 import { formatClockTime } from "../utils/time.js";
 import { playRecordingAudio } from "./app-mode.js";
-import { retryMomentAnnotation } from "../live/moment-annotate.js";
-import { hasGeminiApiKey } from "../live/gemini-settings.js";
+import {
+  reanalyseMoment,
+  retryMomentAnnotation,
+} from "../live/moment-annotate.js";
+import {
+  ANALYSIS_CATEGORIES,
+  ANALYSIS_STATUSES,
+  hasGeminiApiKey,
+} from "../live/gemini-settings.js";
+
+const STATUS_LABELS = {
+  shared: "shared",
+  partly: "partly",
+  overlooked: "overlooked",
+  beyond: "beyond",
+};
 
 const CHART_SRC =
   "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js";
@@ -269,6 +284,209 @@ function statusLabel(recording) {
   return "—";
 }
 
+function createSelect(options, value, ariaLabel, onChange) {
+  const select = document.createElement("select");
+  select.className = "obs-chip__select";
+  select.setAttribute("aria-label", ariaLabel);
+  for (const option of options) {
+    const el = document.createElement("option");
+    el.value = option;
+    el.textContent = option;
+    if (option === value) {
+      el.selected = true;
+    }
+    select.appendChild(el);
+  }
+  select.addEventListener("change", () => onChange(select.value));
+  return select;
+}
+
+function patchAnalysisItem(recordingId, kind, index, field, value) {
+  const recording = getRecordingById(recordingId);
+  if (!recording?.analysis) {
+    return;
+  }
+  const analysis = {
+    ...recording.analysis,
+    observations: (recording.analysis.observations ?? []).map((item) => ({
+      ...item,
+    })),
+    ai_only: (recording.analysis.ai_only ?? []).map((item) => ({ ...item })),
+  };
+  const list = kind === "ai_only" ? analysis.ai_only : analysis.observations;
+  const item = list[index];
+  if (!item) {
+    return;
+  }
+  item[field] = value;
+  item.edited = true;
+  patchRecordingAnnotation(recordingId, { analysis });
+}
+
+function renderObservationRow(recordingId, item, index, kind) {
+  const row = document.createElement("div");
+  row.className =
+    kind === "ai_only"
+      ? "obs-chip obs-chip--ai-only"
+      : `obs-chip obs-chip--${item.status || "partly"}`;
+
+  const text = document.createElement("span");
+  text.className = "obs-chip__text";
+  text.textContent = item.text;
+
+  const controls = document.createElement("div");
+  controls.className = "obs-chip__controls";
+
+  if (kind !== "ai_only") {
+    controls.appendChild(
+      createSelect(ANALYSIS_STATUSES, item.status, "Status", (value) => {
+        patchAnalysisItem(recordingId, kind, index, "status", value);
+      }),
+    );
+  }
+
+  controls.appendChild(
+    createSelect(ANALYSIS_CATEGORIES, item.category, "Category", (value) => {
+      patchAnalysisItem(recordingId, kind, index, "category", value);
+    }),
+  );
+
+  if (item.edited) {
+    const edited = document.createElement("span");
+    edited.className = "obs-chip__edited";
+    edited.textContent = "edited";
+    controls.appendChild(edited);
+  }
+
+  row.append(text, controls);
+  return row;
+}
+
+function renderAnalysisBlock(recording) {
+  const accountsReady =
+    recording.transcript_status === "done" &&
+    recording.description_status === "done" &&
+    Boolean(String(recording.transcript ?? "").trim()) &&
+    Boolean(String(recording.ai_description ?? "").trim());
+  if (!accountsReady && recording.analysis_status !== "done") {
+    return null;
+  }
+
+  const wrap = document.createElement("div");
+  wrap.className = "moment-card__block moment-card__analysis";
+
+  const label = document.createElement("h4");
+  label.textContent = "Comparison";
+  wrap.appendChild(label);
+
+  if (recording.analysis_status === "pending") {
+    const p = document.createElement("p");
+    p.textContent = "Comparing accounts…";
+    wrap.appendChild(p);
+    return wrap;
+  }
+  if (recording.analysis_status === "failed") {
+    const p = document.createElement("p");
+    p.textContent = `Failed: ${recording.analysis_error || "analysis failed"}`;
+    wrap.appendChild(p);
+    return wrap;
+  }
+  if (recording.analysis_status === "skipped" || !recording.analysis) {
+    return null;
+  }
+
+  const list = document.createElement("div");
+  list.className = "obs-list";
+  const observations = recording.analysis.observations ?? [];
+  const aiOnly = recording.analysis.ai_only ?? [];
+
+  for (let i = 0; i < observations.length; i += 1) {
+    list.appendChild(
+      renderObservationRow(recording.recording_id, observations[i], i, "person"),
+    );
+  }
+  for (let i = 0; i < aiOnly.length; i += 1) {
+    list.appendChild(
+      renderObservationRow(recording.recording_id, aiOnly[i], i, "ai_only"),
+    );
+  }
+  if (!observations.length && !aiOnly.length) {
+    const empty = document.createElement("p");
+    empty.textContent = "No observations coded.";
+    wrap.appendChild(empty);
+  } else {
+    wrap.appendChild(list);
+  }
+  return wrap;
+}
+
+function aggregateAnalysis(moments) {
+  const statusTotals = Object.fromEntries(
+    ANALYSIS_STATUSES.map((status) => [status, 0]),
+  );
+  const categoryTotals = Object.fromEntries(
+    ANALYSIS_CATEGORIES.map((category) => [
+      category,
+      { total: 0, missed: 0 },
+    ]),
+  );
+
+  for (const moment of moments) {
+    const live = getRecordingById(moment.recording_id) ?? moment;
+    const observations = live.analysis?.observations ?? [];
+    for (const item of observations) {
+      const status = ANALYSIS_STATUSES.includes(item.status)
+        ? item.status
+        : "partly";
+      const category = ANALYSIS_CATEGORIES.includes(item.category)
+        ? item.category
+        : "objects";
+      statusTotals[status] += 1;
+      categoryTotals[category].total += 1;
+      if (status === "overlooked" || status === "beyond") {
+        categoryTotals[category].missed += 1;
+      }
+    }
+  }
+
+  return { statusTotals, categoryTotals };
+}
+
+function renderAnalysisSummary(section, body, moments) {
+  body.replaceChildren();
+  const liveMoments = moments.map(
+    (moment) => getRecordingById(moment.recording_id) ?? moment,
+  );
+  const analysed = liveMoments.filter(
+    (moment) => moment.analysis_status === "done" && moment.analysis,
+  );
+  section.classList.toggle("hidden", analysed.length === 0);
+  if (!analysed.length) {
+    return;
+  }
+
+  const { statusTotals, categoryTotals } = aggregateAnalysis(analysed);
+  const statusRow = document.createElement("p");
+  statusRow.className = "analysis-summary__statuses";
+  statusRow.textContent = ANALYSIS_STATUSES.map(
+    (status) => `${STATUS_LABELS[status]} ${statusTotals[status]}`,
+  ).join(" · ");
+
+  const categoryList = document.createElement("ul");
+  categoryList.className = "analysis-summary__categories";
+  for (const category of ANALYSIS_CATEGORIES) {
+    const { total, missed } = categoryTotals[category];
+    if (total === 0) {
+      continue;
+    }
+    const li = document.createElement("li");
+    li.textContent = `${category}: ${missed} of ${total} missed`;
+    categoryList.appendChild(li);
+  }
+
+  body.append(statusRow, categoryList);
+}
+
 function revokeThumbUrl(img) {
   const url = img?.dataset?.objectUrl;
   if (url) {
@@ -349,6 +567,10 @@ function renderMomentCard(recording, takenAt) {
   aiSaid.append(aiLabel, aiText);
 
   copy.append(youSaid, aiSaid);
+  const analysisBlock = renderAnalysisBlock(live);
+  if (analysisBlock) {
+    copy.appendChild(analysisBlock);
+  }
   body.append(thumbWrap, copy);
 
   const footer = document.createElement("div");
@@ -366,6 +588,21 @@ function renderMomentCard(recording, takenAt) {
   playBtn.disabled = !live.audio_blob;
   playBtn.addEventListener("click", () => playRecordingAudio(live));
   actions.appendChild(playBtn);
+
+  const canReanalyse =
+    live.transcript_status === "done" &&
+    live.description_status === "done" &&
+    Boolean(String(live.transcript ?? "").trim()) &&
+    Boolean(String(live.ai_description ?? "").trim()) &&
+    live.analysis_status !== "pending";
+  if (canReanalyse) {
+    const reanalyseBtn = document.createElement("button");
+    reanalyseBtn.type = "button";
+    reanalyseBtn.className = "btn btn--quiet summary-play-btn";
+    reanalyseBtn.textContent = "Re-analyse";
+    reanalyseBtn.addEventListener("click", () => reanalyseMoment(id));
+    actions.appendChild(reanalyseBtn);
+  }
 
   if (live.annotation_status === "failed") {
     const retryBtn = document.createElement("button");
@@ -399,6 +636,8 @@ export function initSessionSummary() {
   const empty = document.getElementById("summary-empty");
   const content = document.getElementById("summary-content");
   const chartNote = document.getElementById("summary-chart-note");
+  const analysisSection = document.getElementById("summary-analysis");
+  const analysisBody = document.getElementById("summary-analysis-body");
   const recordingsSection = document.getElementById("summary-recordings");
   const recordingsBody = document.getElementById("summary-recordings-body");
 
@@ -407,6 +646,17 @@ export function initSessionSummary() {
   }
 
   let activeSelection = null;
+
+  function refreshAnalysisSummary() {
+    if (!analysisSection || !analysisBody || !activeSelection) {
+      return;
+    }
+    renderAnalysisSummary(
+      analysisSection,
+      analysisBody,
+      activeSelection.recordings ?? [],
+    );
+  }
 
   function close() {
     openGeneration += 1;
@@ -432,6 +682,7 @@ export function initSessionSummary() {
       revokeThumbUrl(img);
     }
     card.replaceWith(next);
+    refreshAnalysisSummary();
   });
 
   async function open(selection) {
@@ -465,6 +716,7 @@ export function initSessionSummary() {
       stats.frames = stats.captureFrames;
     }
     renderSummary(stats, selection.all ? "These recordings" : "This recording");
+    refreshAnalysisSummary();
     renderRecordingsTable(recordingsSection, recordingsBody, selection);
     if (chartNote) {
       chartNote.textContent = "";
