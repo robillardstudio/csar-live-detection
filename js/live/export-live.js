@@ -61,6 +61,20 @@ function formatNullableNumber(value, digits) {
   return Number(value).toFixed(digits);
 }
 
+// Replace each row's coordinates with the track position at the row's own detection time,
+// so detections between two fixes spread along the path instead of stacking on one fix.
+function withInterpolatedPositions(rows, gps) {
+  if (!gps) {
+    return rows;
+  }
+  return rows.map((row) => {
+    const pos = gps.positionAt(row.timestamp);
+    return pos
+      ? { ...row, lat: pos.lat, lon: pos.lon, gps_accuracy: pos.accuracy }
+      : row;
+  });
+}
+
 function rowToCsvLine(row) {
   return [
     row.timestamp,
@@ -111,8 +125,8 @@ function buildMetadata(rows, backendInfo) {
   };
 }
 
-export function exportLiveDetectionCsv(backendInfo) {
-  const rows = getLiveDetectionLog();
+export function exportLiveDetectionCsv(backendInfo, gps) {
+  const rows = withInterpolatedPositions(getLiveDetectionLog(), gps);
   if (!rows.length) {
     return false;
   }
@@ -123,8 +137,8 @@ export function exportLiveDetectionCsv(backendInfo) {
   return true;
 }
 
-export function exportLiveDetectionJson(backendInfo) {
-  const rows = getLiveDetectionLog();
+export function exportLiveDetectionJson(backendInfo, gps) {
+  const rows = withInterpolatedPositions(getLiveDetectionLog(), gps);
   if (!rows.length) {
     return false;
   }
@@ -138,6 +152,28 @@ export function exportLiveDetectionJson(backendInfo) {
     JSON.stringify(payload, null, 2),
     filename,
     "application/json;charset=utf-8",
+  );
+  return true;
+}
+
+// Every raw fix, including rejected ones, so weak-signal stretches show up in the accuracy column.
+export function exportGpsTrackCsv(backendInfo, gps) {
+  const track = gps?.getTrack() ?? [];
+  if (!track.length) {
+    return false;
+  }
+
+  const csv = [
+    "timestamp,lat,lon,accuracy",
+    ...track.map(
+      (f) =>
+        `${f.timestamp},${formatNullableNumber(f.lat, 8)},${formatNullableNumber(f.lon, 8)},${f.accuracy ?? ""}`,
+    ),
+  ].join("\n");
+  downloadFile(
+    csv,
+    `gps-track_${formatTimestampStamp()}.csv`,
+    "text/csv;charset=utf-8",
   );
   return true;
 }

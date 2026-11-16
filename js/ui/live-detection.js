@@ -28,6 +28,7 @@ import {
 import {
   exportLiveDetectionCsv,
   exportLiveDetectionJson,
+  exportGpsTrackCsv,
 } from "../live/export-live.js";
 import {
   detectObjectsFromSource,
@@ -286,8 +287,8 @@ export function initLiveDetectionPage() {
     busy = false;
     isRecording = false;
     setLiveDetectionActive(false);
+    // Kept (not nulled) so export can still read the track after stopping.
     gps?.stop();
-    gps = null;
     compass?.stop();
     compass = null;
     if (animationFrameId !== null) {
@@ -333,6 +334,7 @@ export function initLiveDetectionPage() {
     frameCtx.drawImage(video, 0, 0, frameW, frameH);
     // Captured with the frame, not after inference: heading changes faster than GPS.
     const orientation = compass?.getReading() ?? null;
+    const frameTime = Date.now();
 
     const { parameters } = getSettings();
     const t0 = performance.now();
@@ -360,7 +362,7 @@ export function initLiveDetectionPage() {
             frameW,
             frameH,
             inferenceMs,
-            timestamp: Date.now(),
+            timestamp: frameTime,
             gpsFix: gps?.getFix() ?? null,
             orientation,
             backend: backendInfo,
@@ -400,7 +402,7 @@ export function initLiveDetectionPage() {
             frameW,
             frameH,
             inferenceMs,
-            timestamp: Date.now(),
+            timestamp: frameTime,
             gpsFix,
             orientation,
             backend: backendInfo,
@@ -496,7 +498,7 @@ export function initLiveDetectionPage() {
 
   function handleExport(exporter) {
     const exportBackend = { ...(backendInfo ?? {}), model: getModelId() };
-    if (!exporter(exportBackend)) {
+    if (!exporter(exportBackend, gps)) {
       showCameraFeedback("Nothing to export — start recording first");
     }
   }
@@ -543,10 +545,10 @@ export function initLiveDetectionPage() {
     if (!item) {
       return;
     }
-    const exporter =
-      item.dataset.export === "json"
-        ? exportLiveDetectionJson
-        : exportLiveDetectionCsv;
+    const exporter = {
+      json: exportLiveDetectionJson,
+      track: exportGpsTrackCsv,
+    }[item.dataset.export] ?? exportLiveDetectionCsv;
     closeExportMenu();
     handleExport(exporter);
   });
