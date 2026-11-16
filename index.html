@@ -14,16 +14,18 @@
       <button type="button" id="btn-record" class="btn btn--secondary" aria-pressed="false">Start Recording</button>
       <div class="export-menu">
         <button type="button" id="btn-export" class="btn btn--secondary export-menu__trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="export-menu">Export</button>
-        <div id="export-menu" class="export-menu__list" role="menu" hidden>
-          <button type="button" class="export-menu__item" role="menuitem" data-export="csv">CSV</button>
-          <button type="button" class="export-menu__item" role="menuitem" data-export="json">JSON</button>
-          <button type="button" class="export-menu__item" role="menuitem" data-export="track">GPS track CSV</button>
-        </div>
       </div>
       <button type="button" id="btn-summary" class="btn btn--secondary" aria-pressed="false">Summary</button>
       <button type="button" id="btn-map" class="btn btn--secondary" aria-pressed="false">Map</button>
     </nav>
   </header>
+
+  <!-- Outside the nav on purpose: the nav scrolls horizontally on phones and can clip a dropdown inside it. -->
+  <div id="export-menu" class="export-menu__list" role="menu" hidden>
+    <button type="button" class="export-menu__item" role="menuitem" data-export="csv">CSV</button>
+    <button type="button" class="export-menu__item" role="menuitem" data-export="json">JSON</button>
+    <button type="button" class="export-menu__item" role="menuitem" data-export="track">GPS track CSV</button>
+  </div>
 
   <div class="app-layout">
     <aside id="sidebar" class="sidebar" aria-label="Live detection status">
