@@ -1,8 +1,10 @@
 // Mic + JPEG frame capture for one Start→Stop Recording "moment". In-memory only.
+// Audio comes from the existing camera stream (no second getUserMedia).
 
 const FRAME_INTERVAL_MS = 5000;
 const FRAME_MAX_EDGE = 768;
 const FRAME_QUALITY = 0.7;
+const LEVEL_INTERVAL_MS = 100;
 
 function pickAudioMime() {
   const candidates = [
@@ -21,50 +23,47 @@ function pickAudioMime() {
   return "";
 }
 
-function captureJpegFromVideo(video) {
-  const videoW = video.videoWidth;
-  const videoH = video.videoHeight;
-  if (!videoW || !videoH) {
-    return null;
-  }
-  const longest = Math.max(videoW, videoH);
-  const scale = longest > FRAME_MAX_EDGE ? FRAME_MAX_EDGE / longest : 1;
-  const width = Math.max(1, Math.round(videoW * scale));
-  const height = Math.max(1, Math.round(videoH * scale));
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    return null;
-  }
-  ctx.drawImage(video, 0, 0, width, height);
-  return canvas.toDataURL("image/jpeg", FRAME_QUALITY);
-}
-
 export function createMomentRecorder({
   getVideo,
+  getCameraStream,
   getGpsFix,
   getHeading,
   onFrame,
   onLevel,
 }) {
-  let micStream = null;
+  const frameCanvas = document.createElement("canvas");
+  const frameCtx = frameCanvas.getContext("2d", { willReadFrequently: true });
+
   let mediaRecorder = null;
   let audioChunks = [];
   let audioMime = "";
   let audioContext = null;
   let analyser = null;
   let levelRaf = null;
+  let lastLevelAt = 0;
   let frameTimer = null;
   let active = false;
   let stopPromise = null;
+  let capturingFrame = false;
+
+  function setAudioTracksEnabled(enabled) {
+    const stream = getCameraStream?.();
+    for (const track of stream?.getAudioTracks?.() ?? []) {
+      track.enabled = enabled;
+    }
+  }
 
   function readLevel() {
     if (!analyser || !active) {
       onLevel?.(0);
       return;
     }
+    levelRaf = requestAnimationFrame(readLevel);
+    const now = performance.now();
+    if (now - lastLevelAt < LEVEL_INTERVAL_MS) {
+      return;
+    }
+    lastLevelAt = now;
     const data = new Uint8Array(analyser.fftSize);
     analyser.getByteTimeDomainData(data);
     let sum = 0;
@@ -74,7 +73,6 @@ export function createMomentRecorder({
     }
     const rms = Math.sqrt(sum / data.length);
     onLevel?.(Math.min(1, rms * 4));
-    levelRaf = requestAnimationFrame(readLevel);
   }
 
   function stopLevelMeter() {
@@ -82,33 +80,50 @@ export function createMomentRecorder({
       cancelAnimationFrame(levelRaf);
       levelRaf = null;
     }
+    lastLevelAt = 0;
     onLevel?.(0);
   }
 
   function captureFrame() {
+    if (capturingFrame || !frameCtx) {
+      return Promise.resolve();
+    }
     const video = getVideo?.();
-    if (!video) {
-      return;
+    if (!video?.videoWidth || !video.videoHeight) {
+      return Promise.resolve();
     }
-    const jpeg = captureJpegFromVideo(video);
-    if (!jpeg) {
-      return;
+    const videoW = video.videoWidth;
+    const videoH = video.videoHeight;
+    const longest = Math.max(videoW, videoH);
+    const scale = longest > FRAME_MAX_EDGE ? FRAME_MAX_EDGE / longest : 1;
+    const width = Math.max(1, Math.round(videoW * scale));
+    const height = Math.max(1, Math.round(videoH * scale));
+    if (frameCanvas.width !== width || frameCanvas.height !== height) {
+      frameCanvas.width = width;
+      frameCanvas.height = height;
     }
-    const fix = getGpsFix?.() ?? null;
-    onFrame?.({
-      timestamp: Date.now(),
-      lat: fix?.lat ?? null,
-      lon: fix?.lon ?? null,
-      heading: getHeading?.() ?? null,
-      jpeg,
+    frameCtx.drawImage(video, 0, 0, width, height);
+    capturingFrame = true;
+    return new Promise((resolve) => {
+      frameCanvas.toBlob(
+        (blob) => {
+          capturingFrame = false;
+          if (blob) {
+            const fix = getGpsFix?.() ?? null;
+            onFrame?.({
+              timestamp: Date.now(),
+              lat: fix?.lat ?? null,
+              lon: fix?.lon ?? null,
+              heading: getHeading?.() ?? null,
+              jpeg: blob,
+            });
+          }
+          resolve();
+        },
+        "image/jpeg",
+        FRAME_QUALITY,
+      );
     });
-  }
-
-  function stopMicTracks() {
-    for (const track of micStream?.getTracks?.() ?? []) {
-      track.stop();
-    }
-    micStream = null;
   }
 
   function closeAudioContext() {
@@ -120,28 +135,24 @@ export function createMomentRecorder({
     }
   }
 
-  async function startMic() {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      return { ok: false, reason: "unsupported" };
-    }
-    try {
-      micStream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: false,
-      });
-    } catch {
+  function startAudioFromCamera() {
+    const cameraStream = getCameraStream?.();
+    const audioTracks = cameraStream?.getAudioTracks?.() ?? [];
+    if (!audioTracks.length) {
       return { ok: false, reason: "denied" };
     }
 
+    setAudioTracksEnabled(true);
+    const audioStream = new MediaStream(audioTracks);
     audioMime = pickAudioMime();
     audioChunks = [];
     try {
       mediaRecorder = audioMime
-        ? new MediaRecorder(micStream, { mimeType: audioMime })
-        : new MediaRecorder(micStream);
+        ? new MediaRecorder(audioStream, { mimeType: audioMime })
+        : new MediaRecorder(audioStream);
       audioMime = mediaRecorder.mimeType || audioMime || "audio/webm";
     } catch {
-      stopMicTracks();
+      setAudioTracksEnabled(false);
       return { ok: false, reason: "unsupported" };
     }
 
@@ -154,7 +165,7 @@ export function createMomentRecorder({
 
     try {
       audioContext = new AudioContext();
-      const source = audioContext.createMediaStreamSource(micStream);
+      const source = audioContext.createMediaStreamSource(audioStream);
       analyser = audioContext.createAnalyser();
       analyser.fftSize = 256;
       source.connect(analyser);
@@ -189,15 +200,25 @@ export function createMomentRecorder({
     });
   }
 
+  async function finishAudio() {
+    const audio_blob = await stopMediaRecorder();
+    closeAudioContext();
+    setAudioTracksEnabled(false);
+    return {
+      audio_blob,
+      audio_mime: audio_blob ? audioMime || null : null,
+    };
+  }
+
   async function start() {
     if (active) {
       return { mic: { ok: true } };
     }
     active = true;
-    const mic = await startMic();
+    const mic = startAudioFromCamera();
     if (!mic.ok) {
-      stopMicTracks();
       closeAudioContext();
+      setAudioTracksEnabled(false);
     }
     captureFrame();
     frameTimer = window.setInterval(captureFrame, FRAME_INTERVAL_MS);
@@ -212,19 +233,16 @@ export function createMomentRecorder({
       return stopPromise;
     }
     stopPromise = (async () => {
-      active = false;
       if (frameTimer != null) {
         clearInterval(frameTimer);
         frameTimer = null;
       }
-      captureFrame();
-      const audio_blob = await stopMediaRecorder();
-      stopMicTracks();
-      closeAudioContext();
-      const result = {
-        audio_blob,
-        audio_mime: audio_blob ? audioMime || null : null,
-      };
+      while (capturingFrame) {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+      await captureFrame();
+      active = false;
+      const result = await finishAudio();
       stopPromise = null;
       return result;
     })();
@@ -233,6 +251,7 @@ export function createMomentRecorder({
 
   async function cancel() {
     if (!active && !mediaRecorder) {
+      setAudioTracksEnabled(false);
       return;
     }
     active = false;
@@ -240,9 +259,7 @@ export function createMomentRecorder({
       clearInterval(frameTimer);
       frameTimer = null;
     }
-    await stopMediaRecorder();
-    stopMicTracks();
-    closeAudioContext();
+    await finishAudio();
     audioChunks = [];
     stopPromise = null;
   }

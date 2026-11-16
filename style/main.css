@@ -242,10 +242,13 @@ button {
 .mic-meter__bar {
   display: block;
   width: 100%;
-  height: 0%;
+  height: 100%;
   background-color: #c0392b;
   border-radius: 1px;
-  transition: height 60ms linear;
+  transform: scaleY(0);
+  transform-origin: bottom center;
+  will-change: transform;
+  transition: transform 60ms linear;
 }
 
 .setting-check {

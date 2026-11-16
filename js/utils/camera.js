@@ -15,14 +15,33 @@ export function showCameraFeedback(message) {
   }, 4000);
 }
 
+function disableAudioTracks(stream) {
+  for (const track of stream.getAudioTracks()) {
+    track.enabled = false;
+  }
+}
+
 export async function requestCameraStream() {
   if (!navigator.mediaDevices?.getUserMedia) {
     throw new Error("unsupported");
   }
 
+  const videoPreferred = { facingMode: "environment" };
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: videoPreferred,
+      audio: true,
+    });
+    disableAudioTracks(stream);
+    return stream;
+  } catch {
+    // Audio denied or unavailable — fall back to video-only.
+  }
+
   try {
     return await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment" },
+      video: videoPreferred,
       audio: false,
     });
   } catch {

@@ -250,6 +250,7 @@ export function initLiveDetectionPage() {
 
   const momentRecorder = createMomentRecorder({
     getVideo: () => video,
+    getCameraStream: () => stream,
     getGpsFix: () => gps?.getFix() ?? gpsFix,
     getHeading: () => compass?.getReading()?.cameraHeading ?? null,
     onFrame: (frame) => addRecordingFrame(frame),
@@ -294,11 +295,11 @@ export function initLiveDetectionPage() {
   }
 
   function setMicLevel(level) {
-    const pct = `${Math.round(Math.max(0, Math.min(1, level)) * 100)}%`;
+    const scale = Math.max(0, Math.min(1, level));
     for (const meter of [micMeterNav, micMeterStrip]) {
       const bar = meter?.querySelector(".mic-meter__bar");
       if (bar) {
-        bar.style.height = pct;
+        bar.style.transform = `scaleY(${scale})`;
       }
     }
   }
@@ -434,6 +435,10 @@ export function initLiveDetectionPage() {
   async function tick() {
     // Single-in-flight: never start a new inference while one is running, so frames cannot pile up.
     if (!running || busy || switchingModel) {
+      return;
+    }
+    // Blind moments skip inference to keep phones stable; opt-in via "Show AI while recording".
+    if (isRecording && !getSettings().showAiWhileRecording) {
       return;
     }
     // Throttle from last *completed* inference, not last tick, so a slow frame still gets breathing room.
