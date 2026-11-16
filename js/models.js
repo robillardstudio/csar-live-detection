@@ -7,7 +7,7 @@ export const MODEL_OPTIONS = [
   { id: "Xenova/yolos-tiny", label: "YOLOS-tiny (detection)", task: "detection", enabled: true },
   { id: "Xenova/detr-resnet-50", label: "DETR (detection)", task: "detection", enabled: true },
   { id: "onnx-community/mobilenetv4_conv_small.e2400_r224_in1k", label: "MobileNet (classification)", task: "classification", enabled: true },
-  { id: "llm:scene-description", label: "LLM — scene description (coming soon)", task: "llm", enabled: false },
+  { id: "gemini:online", label: "Gemini (online)", task: "description", enabled: true },
 ];
 
 // Phones start on the lighter classifier; desktop and iPad on YOLOS-tiny.

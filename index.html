@@ -94,6 +94,18 @@
             <span>Show AI while recording</span>
           </label>
         </section>
+
+        <section class="live-card">
+          <h2 class="live-card__label">Settings</h2>
+          <label class="setting-field" for="setting-gemini-api-key">
+            <span class="setting-field__label">Gemini API key</span>
+            <input type="password" id="setting-gemini-api-key" class="setting-field__input" autocomplete="off" spellcheck="false" placeholder="Stored on this device only">
+          </label>
+          <label class="setting-field" for="setting-gemini-model">
+            <span class="setting-field__label">Description model</span>
+            <input type="text" id="setting-gemini-model" class="setting-field__input" autocomplete="off" spellcheck="false">
+          </label>
+        </section>
       </div>
     </aside>
     <div id="details-backdrop" class="details-backdrop" hidden></div>
@@ -149,6 +161,7 @@
       <section id="review-panel" class="review-panel hidden" aria-label="Review">
         <p id="review-empty" class="review-panel__empty hidden">No recordings yet — switch to Live and press Start Recording.</p>
         <div id="review-body" class="review-panel__body hidden">
+          <p id="review-gemini-note" class="review-panel__note hidden">Add a Gemini API key in Settings to get transcripts and descriptions.</p>
           <div class="review-picker-row">
             <select id="review-recording" class="model-picker review-picker" aria-label="Recording"></select>
             <button type="button" id="btn-play-recording" class="btn btn--secondary" disabled>Play</button>
@@ -196,21 +209,7 @@
 
               <section id="summary-recordings" class="live-card hidden">
                 <h2 class="live-card__label">Moments</h2>
-                <div class="summary-table-wrap">
-                  <table class="summary-table">
-                    <thead>
-                      <tr>
-                        <th scope="col">Recording</th>
-                        <th scope="col">Start</th>
-                        <th scope="col">Duration</th>
-                        <th scope="col">Distance</th>
-                        <th scope="col">Frames</th>
-                        <th scope="col">Audio</th>
-                      </tr>
-                    </thead>
-                    <tbody id="summary-recordings-body"></tbody>
-                  </table>
-                </div>
+                <div id="summary-recordings-body" class="moment-list"></div>
               </section>
 
               <section class="live-card">

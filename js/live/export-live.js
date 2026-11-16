@@ -42,7 +42,23 @@ const CSV_HEADERS = [
   "frame_w",
   "frame_h",
   "inference_ms",
+  "transcript",
+  "ai_description",
+  "description_model",
+  "description_prompt",
 ];
+
+function recordingAnnotationFields(recordingId) {
+  const recording = getRecordings().find(
+    (item) => item.recording_id === recordingId,
+  );
+  return {
+    transcript: recording?.transcript ?? "",
+    ai_description: recording?.ai_description ?? "",
+    description_model: recording?.description_model ?? "",
+    description_prompt: recording?.description_prompt ?? "",
+  };
+}
 
 function formatTimestampStamp(date = new Date()) {
   const pad = (n) => String(n).padStart(2, "0");
@@ -64,6 +80,7 @@ function formatNullableNumber(value, digits) {
 }
 
 function rowToCsvLine(row) {
+  const annotation = recordingAnnotationFields(row.recording_id);
   return [
     row.timestamp,
     row.recording_id ?? "",
@@ -100,6 +117,10 @@ function rowToCsvLine(row) {
     row.frame_w,
     row.frame_h,
     row.inference_ms,
+    quoteCsvLabel(annotation.transcript),
+    quoteCsvLabel(annotation.ai_description),
+    quoteCsvLabel(annotation.description_model),
+    quoteCsvLabel(annotation.description_prompt),
   ].join(",");
 }
 
@@ -132,13 +153,18 @@ export function exportLiveDetectionCsv(backendInfo, recordingId) {
 }
 
 function serializeRecording(item) {
-  const { audio_blob, frames, ...rest } = item;
+  const { audio_blob, frames, transcript_error, description_error, ...rest } =
+    item;
   return {
     ...rest,
     has_audio: Boolean(audio_blob),
     frame_count: frames?.length ?? 0,
     frames: (frames ?? []).map(({ jpeg, ...meta }) => meta),
     track: item.track ?? [],
+    transcript: item.transcript ?? null,
+    ai_description: item.ai_description ?? null,
+    description_model: item.description_model ?? null,
+    description_prompt: item.description_prompt ?? null,
   };
 }
 

@@ -7,6 +7,7 @@ let activeRecording = null;
 const exportedIds = new Set();
 let sessionStart = null;
 const clearListeners = new Set();
+const updateListeners = new Set();
 
 export function getLiveDetectionSessionStart() {
   return sessionStart;
@@ -22,6 +23,10 @@ export function getLiveDetectionLogCount() {
 
 export function getRecordings() {
   return recordings;
+}
+
+export function getRecordingById(recordingId) {
+  return recordings.find((item) => item.recording_id === recordingId) ?? null;
 }
 
 // null means all recordings.
@@ -49,9 +54,36 @@ export function startRecording(modelId, { startGps = null } = {}) {
     track: [],
     start_gps: startGps,
     end_gps: null,
+    transcript: null,
+    transcript_status: null,
+    transcript_error: null,
+    ai_description: null,
+    description_status: null,
+    description_error: null,
+    description_model: null,
+    description_prompt: null,
+    description_timestamp: null,
+    annotation_status: null,
   };
   recordings.push(activeRecording);
   return activeRecording;
+}
+
+export function onRecordingUpdated(listener) {
+  updateListeners.add(listener);
+  return () => updateListeners.delete(listener);
+}
+
+export function patchRecordingAnnotation(recordingId, patch) {
+  const recording = getRecordingById(recordingId);
+  if (!recording) {
+    return null;
+  }
+  Object.assign(recording, patch);
+  for (const listener of updateListeners) {
+    listener(recording);
+  }
+  return recording;
 }
 
 export function addRecordingFrame(frame) {

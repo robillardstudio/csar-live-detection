@@ -7,6 +7,7 @@ import {
 } from "../live/detection-log.js";
 import { formatClockTime } from "../utils/time.js";
 import { showCameraFeedback } from "../utils/camera.js";
+import { hasGeminiApiKey } from "../live/gemini-settings.js";
 
 // null means "All recordings"; Export reads this.
 let selectedRecording = null;
@@ -78,6 +79,7 @@ export function initAppMode(views) {
   const reviewBody = document.getElementById("review-body");
   const picker = document.getElementById("review-recording");
   const playButton = document.getElementById("btn-play-recording");
+  const geminiNote = document.getElementById("review-gemini-note");
   const tablist = document.getElementById("review-tabs");
   const tabs = [...(tablist?.querySelectorAll('[role="tab"]') ?? [])];
 
@@ -187,6 +189,10 @@ export function initAppMode(views) {
     const hasRecordings = snapshot.recordings.length > 0;
     reviewEmpty.classList.toggle("hidden", hasRecordings);
     reviewBody.classList.toggle("hidden", !hasRecordings);
+    geminiNote?.classList.toggle(
+      "hidden",
+      !hasRecordings || hasGeminiApiKey(),
+    );
     if (!hasRecordings) {
       selectedRecording = null;
       picker.replaceChildren();

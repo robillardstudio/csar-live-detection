@@ -33,6 +33,7 @@ import {
   stopRecording,
 } from "../live/detection-log.js";
 import { createMomentRecorder } from "../live/moment-recorder.js";
+import { enqueueMomentAnnotation } from "../live/moment-annotate.js";
 import {
   exportLiveDetectionCsv,
   exportLiveDetectionJson,
@@ -428,6 +429,9 @@ export function initLiveDetectionPage() {
       audio_mime: audio.audio_mime,
       end_gps: gpsSnapshot(gps?.getFix() ?? gpsFix),
     });
+    if (done) {
+      enqueueMomentAnnotation(done.recording_id);
+    }
     updateControls();
     if (toast && done) {
       showCameraFeedback(
