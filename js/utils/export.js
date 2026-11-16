@@ -5,6 +5,10 @@ export function downloadFile(content, filename, mimeType) {
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;
+  // Attached and revoked late: mobile Safari ignores a detached link or a URL revoked right after click.
+  link.hidden = true;
+  document.body.appendChild(link);
   link.click();
-  URL.revokeObjectURL(url);
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
