@@ -139,7 +139,14 @@ export function exportLiveDetectionJson(backendInfo, recordingId) {
 
   const recordings = getRecordings()
     .filter((item) => recordingId == null || item.recording_id === recordingId)
-    .map((item) => ({ ...item }));
+    .map((item) => {
+      const { audio_blob, frames, ...rest } = item;
+      return {
+        ...rest,
+        has_audio: Boolean(audio_blob),
+        frame_count: frames?.length ?? 0,
+      };
+    });
   const payload = {
     ...buildMetadata(rows, backendInfo),
     recordings,

@@ -6,12 +6,47 @@ import {
   recordingDurationMs,
 } from "../live/detection-log.js";
 import { formatClockTime } from "../utils/time.js";
+import { showCameraFeedback } from "../utils/camera.js";
 
 // null means "All recordings"; Export reads this.
 let selectedRecording = null;
+let activeAudio = null;
+let activeAudioUrl = null;
 
 export function getSelectedRecordingId() {
   return selectedRecording;
+}
+
+export function playRecordingAudio(recording) {
+  stopPlayback();
+  if (!recording?.audio_blob) {
+    showCameraFeedback("No audio for this recording");
+    return;
+  }
+  activeAudioUrl = URL.createObjectURL(recording.audio_blob);
+  activeAudio = new Audio(activeAudioUrl);
+  activeAudio.addEventListener(
+    "ended",
+    () => {
+      stopPlayback();
+    },
+    { once: true },
+  );
+  activeAudio.play().catch(() => {
+    stopPlayback();
+    showCameraFeedback("Could not play audio");
+  });
+}
+
+function stopPlayback() {
+  if (activeAudio) {
+    activeAudio.pause();
+    activeAudio = null;
+  }
+  if (activeAudioUrl) {
+    URL.revokeObjectURL(activeAudioUrl);
+    activeAudioUrl = null;
+  }
 }
 
 function formatShortDuration(ms) {
@@ -42,6 +77,7 @@ export function initAppMode(views) {
   const reviewEmpty = document.getElementById("review-empty");
   const reviewBody = document.getElementById("review-body");
   const picker = document.getElementById("review-recording");
+  const playButton = document.getElementById("btn-play-recording");
   const tablist = document.getElementById("review-tabs");
   const tabs = [...(tablist?.querySelectorAll('[role="tab"]') ?? [])];
 
@@ -94,6 +130,19 @@ export function initAppMode(views) {
     }
   }
 
+  function updatePlayButton() {
+    if (!playButton) {
+      return;
+    }
+    const recording =
+      selectedRecording == null
+        ? null
+        : snapshot?.recordings.find(
+            (item) => item.recording_id === selectedRecording,
+          );
+    playButton.disabled = !recording?.audio_blob;
+  }
+
   function showSelection() {
     closeViews();
     selectedRecording = picker.value === "all" ? null : Number(picker.value);
@@ -110,6 +159,7 @@ export function initAppMode(views) {
             (item) => item.recording_id === selectedRecording,
           ),
     };
+    updatePlayButton();
     showTab(activeTab);
   }
 
@@ -140,6 +190,7 @@ export function initAppMode(views) {
     if (!hasRecordings) {
       selectedRecording = null;
       picker.replaceChildren();
+      updatePlayButton();
       return;
     }
     fillPicker();
@@ -168,6 +219,12 @@ export function initAppMode(views) {
   }
 
   picker.addEventListener("change", showSelection);
+  playButton?.addEventListener("click", () => {
+    const recording = getRecordings().find(
+      (item) => item.recording_id === selectedRecording,
+    );
+    playRecordingAudio(recording);
+  });
 
   for (const button of modeButtons) {
     button.addEventListener("click", () => setMode(button.dataset.appMode));
@@ -199,6 +256,7 @@ export function initAppMode(views) {
   });
 
   onLiveDetectionLogCleared(() => {
+    stopPlayback();
     if (mode === "review") {
       renderReview();
     }

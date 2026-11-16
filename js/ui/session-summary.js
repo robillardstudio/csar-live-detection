@@ -1,6 +1,7 @@
 // On-demand snapshot of the in-memory detection log. Does not record, detect, or export.
 import { recordingDurationMs } from "../live/detection-log.js";
 import { formatClockTime } from "../utils/time.js";
+import { playRecordingAudio } from "./app-mode.js";
 
 const CHART_SRC =
   "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js";
@@ -245,6 +246,15 @@ function renderRecordingsTable(section, body, selection) {
       cell.textContent = text;
       row.appendChild(cell);
     }
+    const playCell = document.createElement("td");
+    const playBtn = document.createElement("button");
+    playBtn.type = "button";
+    playBtn.className = "btn btn--quiet summary-play-btn";
+    playBtn.textContent = "Play";
+    playBtn.disabled = !recording.audio_blob;
+    playBtn.addEventListener("click", () => playRecordingAudio(recording));
+    playCell.appendChild(playBtn);
+    row.appendChild(playCell);
     body.appendChild(row);
   }
 }

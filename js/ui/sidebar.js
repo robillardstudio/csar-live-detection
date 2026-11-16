@@ -1,4 +1,4 @@
-// Live-loop defaults (confidence / max objects). No settings UI yet; getSettings() is the seam for one later.
+// Live-loop defaults (confidence / max objects) plus recording preferences.
 import { MODEL_OPTIONS, getModelId } from "../models.js";
 
 const DEFAULT_PARAMETERS = {
@@ -6,11 +6,27 @@ const DEFAULT_PARAMETERS = {
   maxObjects: 10,
 };
 
+const recordingSettings = {
+  showAiWhileRecording: false,
+};
+
 export function getSettings() {
   return {
     analysisSettings: {},
     parameters: { ...DEFAULT_PARAMETERS },
+    showAiWhileRecording: recordingSettings.showAiWhileRecording,
   };
+}
+
+export function initRecordingSettings() {
+  const checkbox = document.getElementById("setting-show-ai-while-recording");
+  if (!checkbox) {
+    return;
+  }
+  checkbox.checked = recordingSettings.showAiWhileRecording;
+  checkbox.addEventListener("change", () => {
+    recordingSettings.showAiWhileRecording = checkbox.checked;
+  });
 }
 
 // The sidebar and the start screen each have a picker; both show the same model.

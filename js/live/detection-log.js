@@ -35,22 +35,44 @@ export function recordingDurationMs(recording, now = Date.now()) {
   return (recording.end_time ?? now) - recording.start_time;
 }
 
-export function startRecording(modelId) {
+export function startRecording(modelId, { startGps = null } = {}) {
   activeRecording = {
     recording_id: recordings.length + 1,
     start_time: Date.now(),
     end_time: null,
     model: modelId,
     row_count: 0,
+    audio_blob: null,
+    audio_mime: null,
+    duration_ms: null,
+    frames: [],
+    start_gps: startGps,
+    end_gps: null,
   };
   recordings.push(activeRecording);
+  return activeRecording;
 }
 
-export function stopRecording() {
+export function addRecordingFrame(frame) {
   if (activeRecording) {
-    activeRecording.end_time = Date.now();
-    activeRecording = null;
+    activeRecording.frames.push(frame);
   }
+}
+
+// Ends the active recording and attaches audio / end GPS when provided.
+export function stopRecording({ audio_blob = null, audio_mime = null, end_gps = null } = {}) {
+  if (!activeRecording) {
+    return null;
+  }
+  activeRecording.end_time = Date.now();
+  activeRecording.duration_ms =
+    activeRecording.end_time - activeRecording.start_time;
+  activeRecording.audio_blob = audio_blob;
+  activeRecording.audio_mime = audio_mime;
+  activeRecording.end_gps = end_gps;
+  const done = activeRecording;
+  activeRecording = null;
+  return done;
 }
 
 // A recording counts as exported once an export included it; rows logged after that undo it.

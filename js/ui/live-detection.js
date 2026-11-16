@@ -21,6 +21,7 @@ import {
   projectPosition,
 } from "../utils/position.js";
 import {
+  addRecordingFrame,
   clearLiveDetectionLog,
   getLiveDetectionLogCount,
   getRecordings,
@@ -30,6 +31,7 @@ import {
   startRecording,
   stopRecording,
 } from "../live/detection-log.js";
+import { createMomentRecorder } from "../live/moment-recorder.js";
 import {
   exportLiveDetectionCsv,
   exportLiveDetectionJson,
@@ -42,6 +44,7 @@ import { classifyImageFromSource } from "../analysis/classify.js";
 import {
   getSettings,
   initModelPicker,
+  initRecordingSettings,
   setModelPickersDisabled,
   syncModelPickers,
 } from "./sidebar.js";
@@ -116,6 +119,20 @@ function formatGpsFix(fix) {
   return `${fix.lat.toFixed(8)}, ${fix.lon.toFixed(8)}\n${formatGpsAccuracy(fix)}`;
 }
 
+function formatRecordTimer(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function gpsSnapshot(fix) {
+  if (!fix) {
+    return null;
+  }
+  return { lat: fix.lat, lon: fix.lon, accuracy: fix.accuracy ?? null };
+}
+
 // TEMPORARY field-test display: corrected camera heading, plus the raw inputs it came from.
 function formatHeading(reading) {
   if (reading?.heading == null) {
@@ -188,6 +205,10 @@ export function initLiveDetectionPage() {
   const exportButton = document.getElementById("btn-export");
   const exportMenu = document.getElementById("export-menu");
   const clearButton = document.getElementById("btn-clear-recordings");
+  const liveStage = document.getElementById("live-stage");
+  const micMeterNav = document.getElementById("mic-meter-nav");
+  const micMeterStrip = document.getElementById("mic-meter-strip");
+  const micMeterStripItem = document.getElementById("mic-meter-strip-item");
 
   if (
     !video ||
@@ -219,11 +240,21 @@ export function initLiveDetectionPage() {
   let busy = false;
   let switchingModel = false;
   let isRecording = false;
+  let recordStartedAt = 0;
+  let recordTimerId = null;
   let animationFrameId = null;
   let lastCompletedInferenceAt = 0;
   let frameW = 0;
   let frameH = 0;
   let logGeneration = 0;
+
+  const momentRecorder = createMomentRecorder({
+    getVideo: () => video,
+    getGpsFix: () => gps?.getFix() ?? gpsFix,
+    getHeading: () => compass?.getReading()?.cameraHeading ?? null,
+    onFrame: (frame) => addRecordingFrame(frame),
+    onLevel: (level) => setMicLevel(level),
+  });
 
   // A metric can appear in both the sidebar and the phone status strip.
   function setMetric(name, value) {
@@ -253,12 +284,53 @@ export function initLiveDetectionPage() {
     setMetric("logged", String(getLiveDetectionLogCount()));
   }
 
+  function showAiOverlays() {
+    return !isRecording || getSettings().showAiWhileRecording;
+  }
+
+  function clearAiOverlays() {
+    mediaWrap.querySelector(".bounding-boxes")?.remove();
+    renderClassificationReadout(null);
+  }
+
+  function setMicLevel(level) {
+    const pct = `${Math.round(Math.max(0, Math.min(1, level)) * 100)}%`;
+    for (const meter of [micMeterNav, micMeterStrip]) {
+      const bar = meter?.querySelector(".mic-meter__bar");
+      if (bar) {
+        bar.style.height = pct;
+      }
+    }
+  }
+
+  function setMicMetersVisible(visible) {
+    micMeterNav?.classList.toggle("hidden", !visible);
+    micMeterStripItem?.classList.toggle("hidden", !visible);
+  }
+
+  function stopRecordTimer() {
+    if (recordTimerId != null) {
+      clearInterval(recordTimerId);
+      recordTimerId = null;
+    }
+  }
+
+  function startRecordTimer() {
+    stopRecordTimer();
+    recordStartedAt = Date.now();
+    const tick = () => {
+      recordButton.textContent = `● Stop · ${formatRecordTimer(Date.now() - recordStartedAt)}`;
+    };
+    tick();
+    recordTimerId = window.setInterval(tick, 250);
+  }
+
   function renderClassificationReadout(predictions) {
     const readout = document.getElementById("class-readout");
     if (!readout) {
       return;
     }
-    if (!predictions?.length) {
+    if (!predictions?.length || !showAiOverlays()) {
       readout.hidden = true;
       readout.replaceChildren();
       return;
@@ -279,14 +351,56 @@ export function initLiveDetectionPage() {
       : "Start Live Detection";
     liveToggle.setAttribute("aria-pressed", String(running));
     recordButton.disabled = !running;
-    recordButton.textContent = isRecording
-      ? "Stop Recording"
-      : "Start Recording";
+    if (!isRecording) {
+      recordButton.textContent = "Start Recording";
+    }
     recordButton.setAttribute("aria-pressed", String(isRecording));
     recordButton.classList.toggle("btn--record-active", isRecording);
+    liveStage?.classList.toggle("live-stage--recording", isRecording);
+    setMicMetersVisible(isRecording);
     feed.hidden = !running;
     idle.hidden = running;
     clearButton.disabled = getRecordings().length === 0;
+  }
+
+  async function beginRecording() {
+    if (!running || isRecording) {
+      return;
+    }
+    isRecording = true;
+    startRecording(getModelId(), {
+      startGps: gpsSnapshot(gps?.getFix() ?? gpsFix),
+    });
+    if (!showAiOverlays()) {
+      clearAiOverlays();
+    }
+    startRecordTimer();
+    updateControls();
+    const { mic } = await momentRecorder.start();
+    if (!mic.ok) {
+      showCameraFeedback("Microphone unavailable — recording without audio");
+    }
+  }
+
+  async function endRecording({ toast = true } = {}) {
+    if (!isRecording) {
+      return null;
+    }
+    isRecording = false;
+    stopRecordTimer();
+    const audio = await momentRecorder.stop();
+    const done = stopRecording({
+      audio_blob: audio.audio_blob,
+      audio_mime: audio.audio_mime,
+      end_gps: gpsSnapshot(gps?.getFix() ?? gpsFix),
+    });
+    updateControls();
+    if (toast && done) {
+      showCameraFeedback(
+        `Saved · Recording ${done.recording_id} · ${formatRecordTimer(done.duration_ms)}`,
+      );
+    }
+    return done;
   }
 
   function stopStream() {
@@ -297,13 +411,12 @@ export function initLiveDetectionPage() {
     video.srcObject = null;
   }
 
-  function stopLiveDetection() {
+  async function stopLiveDetection() {
     running = false;
     busy = false;
     if (isRecording) {
-      stopRecording();
+      await endRecording({ toast: true });
     }
-    isRecording = false;
     setLiveDetectionActive(false);
     gps?.stop();
     gps = null;
@@ -314,8 +427,7 @@ export function initLiveDetectionPage() {
       animationFrameId = null;
     }
     stopStream();
-    mediaWrap.querySelector(".bounding-boxes")?.remove();
-    renderClassificationReadout(null);
+    clearAiOverlays();
     updateControls();
   }
 
@@ -368,7 +480,11 @@ export function initLiveDetectionPage() {
         console.log(`[TIMING] live: ${inferenceMs.toFixed(0)}ms`);
         metrics.recordInferenceMs(inferenceMs);
         mediaWrap.querySelector(".bounding-boxes")?.remove();
-        renderClassificationReadout(predictions);
+        if (showAiOverlays()) {
+          renderClassificationReadout(predictions);
+        } else {
+          renderClassificationReadout(null);
+        }
 
         if (isRecording && generation === logGeneration) {
           logDetectionFrame({
@@ -412,8 +528,12 @@ export function initLiveDetectionPage() {
             estLon: estimate?.lon ?? null,
           };
         });
-        renderClassificationReadout(null);
-        renderBoundingBoxesOnContainer(mediaWrap, detections, frameCanvas);
+        if (showAiOverlays()) {
+          renderClassificationReadout(null);
+          renderBoundingBoxesOnContainer(mediaWrap, detections, frameCanvas);
+        } else {
+          clearAiOverlays();
+        }
 
         if (isRecording && generation === logGeneration) {
           logDetectionFrame({
@@ -544,11 +664,17 @@ export function initLiveDetectionPage() {
         return;
       }
     }
-    isRecording = false;
-    logGeneration += 1;
-    clearLiveDetectionLog();
-    updateControls();
-    updateMetricsPanel();
+    void (async () => {
+      if (isRecording) {
+        isRecording = false;
+        stopRecordTimer();
+        await momentRecorder.cancel();
+      }
+      logGeneration += 1;
+      clearLiveDetectionLog();
+      updateControls();
+      updateMetricsPanel();
+    })();
   }
   function closeExportMenu() {
     exportMenu.hidden = true;
@@ -567,7 +693,7 @@ export function initLiveDetectionPage() {
 
   liveToggle.addEventListener("click", () => {
     if (running) {
-      stopLiveDetection();
+      void stopLiveDetection();
     } else {
       startLiveDetection();
     }
@@ -577,13 +703,11 @@ export function initLiveDetectionPage() {
     if (!running) {
       return;
     }
-    isRecording = !isRecording;
     if (isRecording) {
-      startRecording(getModelId());
+      void endRecording({ toast: true });
     } else {
-      stopRecording();
+      void beginRecording();
     }
-    updateControls();
   });
   clearButton.addEventListener("click", clearRecordings);
   exportButton.addEventListener("click", () => {
@@ -650,6 +774,7 @@ export function initLiveDetectionPage() {
   }
 
   initModelPicker(handleModelSelect);
+  initRecordingSettings();
   updateControls();
   updateMetricsPanel();
 }
