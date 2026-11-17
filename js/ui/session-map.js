@@ -1,4 +1,6 @@
-// On-demand map of the walked GPS path and detections from the in-memory detection log. Read-only.
+// On-demand map of the walked GPS path and detections from the in-memory detection log.
+import { logLabelReplace } from "../live/detection-log.js";
+
 const LEAFLET_CSS =
   "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
 const LEAFLET_JS =
@@ -20,40 +22,10 @@ const OVERLAYS = [
   ["sightLines", "Sight lines"],
   ["labels", 'Labels <span class="map-layers__hint">(zoom in)</span>'],
 ];
-// All label colors avoid the path blue and the start green / end red.
-const FIXED_LABEL_COLORS = new Map([
-  ["person", "#f59e0b"],
-  ["bench", "#8b5cf6"],
-  ["tree", "#a16207"],
-  ["car", "#ec4899"],
-  ["bicycle", "#06b6d4"],
-  ["dog", "#d946ef"],
-  ["potted plant", "#14b8a6"],
-  ["traffic light", "#334155"],
-]);
-// Hash fallback for every other label. None of these repeat a fixed color.
-const LABEL_PALETTE = [
-  "#fde047",
-  "#ca8a04",
-  "#f97316",
-  "#c2410c",
-  "#fdba74",
-  "#f9a8d4",
-  "#9d174d",
-  "#fb7185",
-  "#c4b5fd",
-  "#5b21b6",
-  "#e879f9",
-  "#86198f",
-  "#67e8f9",
-  "#0e7490",
-  "#5eead4",
-  "#115e59",
-  "#78716c",
-  "#94a3b8",
-  "#1c1917",
-  "#78350f",
-];
+const COLOR_AI = "#16a34a";
+const COLOR_USER = "#ea580c";
+const DOT_RADIUS_AI = 5;
+const DOT_RADIUS_USER = 8;
 const LEGEND_LIMIT = 8;
 // 5 decimal places is ~1 m, finer than phone GPS accuracy.
 const DEDUPE_DECIMALS = 5;
@@ -64,6 +36,7 @@ const FAN_SPACING_PX = 13;
 
 // Kept for the page visit across tabs, recordings and mode switches; no storage.
 const layerState = { base: "street", overlays: new Set(["path", "viewer"]) };
+let labelView = "changes";
 
 let map = null;
 let layers = null;
@@ -177,21 +150,6 @@ function extractPaths(rows) {
     .filter((item) => item.points.length > 0);
 }
 
-// Fixed colors first, then FNV-1a over the label name, so a label keeps its color across sessions.
-function labelColor(label) {
-  const fixed = FIXED_LABEL_COLORS.get(label.toLowerCase());
-  if (fixed) {
-    return fixed;
-  }
-
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < label.length; i += 1) {
-    hash ^= label.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return LABEL_PALETTE[(hash >>> 0) % LABEL_PALETTE.length];
-}
-
 function readCoordinate(lat, lon) {
   if (lat == null || lon == null) {
     return null;
@@ -220,46 +178,103 @@ function objectPosition(row) {
   };
 }
 
-function extractDetectionPoints(rows, positionOf) {
+// Latest replace/delete per AI row id; later actions win.
+function latestOverrides(rows) {
+  const overrides = new Map();
+  for (const row of rows) {
+    if (
+      row.source === "user" &&
+      (row.action === "replace" || row.action === "delete") &&
+      row.refers_to_row != null
+    ) {
+      overrides.set(row.refers_to_row, row);
+    }
+  }
+  return overrides;
+}
+
+function addDot(points, labelCounts, position, fields) {
+  const { lat, lon, ...extras } = position;
+  const key = `${lat.toFixed(DEDUPE_DECIMALS)},${lon.toFixed(DEDUPE_DECIMALS)},${fields.label},${fields.changed ? "u" : "a"}`;
+  labelCounts.set(fields.label, (labelCounts.get(fields.label) ?? 0) + 1);
+  const confidence = Number(fields.confidence);
+  const existing = points.get(key);
+  if (existing) {
+    existing.count += 1;
+    if (Number.isFinite(confidence) && !(confidence <= existing.confidence)) {
+      Object.assign(existing, extras, fields, {
+        confidence: Number.isFinite(confidence) ? confidence : null,
+      });
+    }
+    return;
+  }
+  points.set(key, {
+    lat,
+    lon,
+    ...extras,
+    ...fields,
+    confidence: Number.isFinite(confidence) ? confidence : null,
+    count: 1,
+  });
+}
+
+function extractDetectionPoints(rows, positionOf, withChanges) {
   const points = new Map();
   const labelCounts = new Map();
+  const overrides = latestOverrides(rows);
 
   for (const row of rows) {
+    if (row.source === "user") {
+      continue;
+    }
     const position = positionOf(row);
-    const label = typeof row.label === "string" ? row.label.trim() : "";
-    if (!position || !label) {
+    const aiLabel = typeof row.label === "string" ? row.label.trim() : "";
+    if (!position || !aiLabel) {
       continue;
     }
 
-    labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
-
-    const { lat, lon, ...extras } = position;
-    const key = `${lat.toFixed(DEDUPE_DECIMALS)},${lon.toFixed(DEDUPE_DECIMALS)},${label}`;
-    const confidence = Number(row.confidence);
-    const existing = points.get(key);
-    if (existing) {
-      existing.count += 1;
-      // Distance and viewer position follow the highest-confidence sighting.
-      if (Number.isFinite(confidence) && !(confidence <= existing.confidence)) {
-        existing.confidence = confidence;
-        Object.assign(existing, extras);
-      }
+    const override = withChanges ? overrides.get(row.id) : null;
+    if (override?.action === "delete") {
       continue;
     }
-    points.set(key, {
-      lat,
-      lon,
-      ...extras,
+    const replace = override?.action === "replace" ? override : null;
+    const label = replace
+      ? String(replace.label ?? "").trim() || aiLabel
+      : aiLabel;
+    addDot(points, labelCounts, position, {
       label,
-      confidence: Number.isFinite(confidence) ? confidence : null,
-      count: 1,
+      aiLabel,
+      userLabel: replace?.label ?? null,
+      changed: Boolean(replace),
+      row,
+      confidence: row.confidence,
     });
+  }
+
+  if (withChanges) {
+    for (const row of rows) {
+      if (row.source !== "user" || row.action !== "add") {
+        continue;
+      }
+      const label = typeof row.label === "string" ? row.label.trim() : "";
+      const position = positionOf(row);
+      if (!position || !label) {
+        continue;
+      }
+      addDot(points, labelCounts, position, {
+        label,
+        aiLabel: row.refers_to_label ?? label,
+        userLabel: label,
+        changed: true,
+        row: null,
+        confidence: null,
+      });
+    }
   }
 
   const labels = [...labelCounts.entries()]
     .map(([label, count]) => ({ label, count }))
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
-  const colors = new Map(labels.map((item) => [item.label, labelColor(item.label)]));
   const rank = new Map(labels.map((item, index) => [item.label, index]));
 
   // Most frequent labels are drawn first so rarer labels sit on top and stay clickable.
@@ -267,7 +282,7 @@ function extractDetectionPoints(rows, positionOf) {
     (a, b) => rank.get(a.label) - rank.get(b.label),
   );
 
-  return { dots, labels, colors };
+  return { dots, labels };
 }
 
 function themeColor(name, fallback) {
@@ -296,6 +311,18 @@ function detectionPopup(dot, stackSize, kind) {
   title.textContent = `${dot.label} — ${confidence}${distance}`;
   content.appendChild(title);
 
+  if (dot.changed && dot.userLabel && dot.row) {
+    const changeNote = document.createElement("p");
+    changeNote.className = "map-popup__note";
+    changeNote.textContent = `AI said: ${dot.aiLabel} → changed to: ${dot.userLabel}`;
+    content.appendChild(changeNote);
+  } else if (dot.changed && !dot.row) {
+    const added = document.createElement("p");
+    added.className = "map-popup__note";
+    added.textContent = "User added";
+    content.appendChild(added);
+  }
+
   const where = document.createElement("p");
   where.className = "map-popup__note";
   where.textContent =
@@ -315,6 +342,46 @@ function detectionPopup(dot, stackSize, kind) {
     stacked.textContent = `Stacked: ${stackSize} labels at this spot`;
     content.appendChild(stacked);
   }
+
+  if (dot.row) {
+    const actions = document.createElement("div");
+    actions.className = "map-popup__actions";
+    const changeBtn = document.createElement("button");
+    changeBtn.type = "button";
+    changeBtn.className = "map-popup__change";
+    changeBtn.textContent = "Change label";
+    actions.appendChild(changeBtn);
+    content.appendChild(actions);
+
+    changeBtn.addEventListener("click", () => {
+      actions.replaceChildren();
+      const form = document.createElement("form");
+      form.className = "map-popup__form";
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "map-popup__input";
+      input.value = dot.aiLabel;
+      input.setAttribute("aria-label", "New label");
+      const save = document.createElement("button");
+      save.type = "submit";
+      save.className = "map-popup__save";
+      save.textContent = "Save";
+      form.append(input, save);
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const next = input.value.trim();
+        if (!next || !dot.row) {
+          return;
+        }
+        logLabelReplace(dot.row, next);
+        map?.closePopup();
+      });
+      actions.appendChild(form);
+      input.focus();
+      input.select();
+    });
+  }
+
   return content;
 }
 
@@ -345,10 +412,10 @@ function drawDots(L, detections, kind, panel) {
       // Label text is set as a text node; Leaflet would parse a string as HTML.
       const marker = L.circleMarker(center, {
         pane: "mapDots",
-        radius: 5,
+        radius: dot.changed ? DOT_RADIUS_USER : DOT_RADIUS_AI,
         color: panel,
         weight: 1,
-        fillColor: detections.colors.get(dot.label),
+        fillColor: dot.changed ? COLOR_USER : COLOR_AI,
         fillOpacity: 0.9,
       })
         .bindPopup(detectionPopup(dot, group.length, kind))
@@ -380,7 +447,7 @@ function drawSightLines(L, detections) {
   for (const dot of detections.dots) {
     L.polyline([dot.viewer, [dot.lat, dot.lon]], {
       pane: "mapLines",
-      color: detections.colors.get(dot.label),
+      color: dot.changed ? COLOR_USER : COLOR_AI,
       weight: 1.5,
       opacity: 0.4,
       interactive: false,
@@ -498,13 +565,33 @@ function renderLegend(legend, recordings, detections) {
     );
   }
 
+  if (detections?.dots.length) {
+    const changedCount = detections.dots.filter((dot) => dot.changed).length;
+    const aiSwatch = document.createElement("span");
+    aiSwatch.className = "map-legend__swatch";
+    aiSwatch.style.backgroundColor = COLOR_AI;
+    const userSwatch = document.createElement("span");
+    userSwatch.className = "map-legend__swatch";
+    userSwatch.style.backgroundColor = COLOR_USER;
+    groups.push(
+      legendGroup("Annotation", [
+        {
+          swatch: aiSwatch,
+          name: "AI label",
+          count: detections.dots.length - changedCount,
+        },
+        { swatch: userSwatch, name: "Changed", count: changedCount },
+      ]),
+    );
+  }
+
   if (detections?.labels.length) {
     const group = legendGroup(
       "Labels",
       detections.labels.slice(0, LEGEND_LIMIT).map((item) => {
         const swatch = document.createElement("span");
         swatch.className = "map-legend__swatch";
-        swatch.style.backgroundColor = detections.colors.get(item.label);
+        swatch.style.backgroundColor = COLOR_AI;
         return { swatch, name: item.label, count: item.count };
       }),
     );
@@ -603,15 +690,38 @@ export function initSessionMap() {
   const canvas = document.getElementById("map-canvas");
   const legend = document.getElementById("map-legend");
   const objectsEmpty = document.getElementById("map-objects-empty");
+  const labelViewToggle = document.getElementById("map-label-view");
 
   if (!empty || !errorNote || !canvas || !legend || !objectsEmpty) {
     return null;
   }
 
   let snapshot = null;
+  let selectionRows = [];
+  let selectionPaths = [];
   // Path points and object estimates, so turning a layer on never needs a refit.
   let fitPoints = [];
   let fitPending = false;
+
+  function syncLabelViewToggle() {
+    if (!labelViewToggle) {
+      return;
+    }
+    for (const button of labelViewToggle.querySelectorAll("[data-label-view]")) {
+      button.setAttribute(
+        "aria-pressed",
+        String(button.dataset.labelView === labelView),
+      );
+    }
+  }
+
+  function buildSnapshot(rows) {
+    const withChanges = labelView === "changes";
+    return {
+      viewer: extractDetectionPoints(rows, viewerPosition, withChanges),
+      objects: extractDetectionPoints(rows, objectPosition, withChanges),
+    };
+  }
 
   function syncLayers() {
     if (!map) {
@@ -659,12 +769,10 @@ export function initSessionMap() {
   async function open(selection) {
     const generation = ++openGeneration;
     const rows = selection.rows;
-    const paths = extractPaths(rows);
-    const path = paths.flatMap((item) => item.points);
-    snapshot = {
-      viewer: extractDetectionPoints(rows, viewerPosition),
-      objects: extractDetectionPoints(rows, objectPosition),
-    };
+    selectionRows = rows;
+    selectionPaths = extractPaths(rows);
+    const path = selectionPaths.flatMap((item) => item.points);
+    snapshot = buildSnapshot(rows);
     fitPoints = [
       ...path,
       ...snapshot.objects.dots.map((dot) => [dot.lat, dot.lon]),
@@ -672,6 +780,7 @@ export function initSessionMap() {
     errorNote.classList.add("hidden");
     objectsEmpty.classList.add("hidden");
     clearLegend();
+    syncLabelViewToggle();
 
     const hasPath = path.length > 0;
     empty.classList.toggle("hidden", hasPath);
@@ -686,7 +795,7 @@ export function initSessionMap() {
       if (generation !== openGeneration || !L) {
         return;
       }
-      drawMap(L, canvas, paths, snapshot, syncLayers);
+      drawMap(L, canvas, selectionPaths, snapshot, syncLayers);
       // The tab may have been hidden while Leaflet loaded; fit again once it is shown.
       fitPending = canvas.offsetWidth === 0;
       fit();
@@ -700,6 +809,34 @@ export function initSessionMap() {
       errorNote.classList.remove("hidden");
     }
   }
+
+  async function redrawForLabelView() {
+    if (!selectionRows.length || canvas.classList.contains("hidden")) {
+      return;
+    }
+    const generation = ++openGeneration;
+    snapshot = buildSnapshot(selectionRows);
+    syncLabelViewToggle();
+    try {
+      const L = await loadLeaflet();
+      if (generation !== openGeneration || !L) {
+        return;
+      }
+      drawMap(L, canvas, selectionPaths, snapshot, syncLayers);
+      fit();
+    } catch (error) {
+      console.error("[MAP] map failed:", error);
+    }
+  }
+
+  labelViewToggle?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-label-view]");
+    if (!button || button.dataset.labelView === labelView) {
+      return;
+    }
+    labelView = button.dataset.labelView;
+    redrawForLabelView();
+  });
 
   // Leaflet caches its size, so re-measure after the tab is shown again.
   function resize() {

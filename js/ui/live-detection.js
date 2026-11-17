@@ -42,24 +42,52 @@ import { classifyImageFromSource } from "../analysis/classify.js";
 import {
   getSettings,
   initModelPicker,
+  initStillSettings,
   setModelPickersDisabled,
   syncModelPickers,
 } from "./sidebar.js";
+import { initModelsSheet } from "./details-sheet.js";
 import { getSelectedRecordingId } from "./app-mode.js";
+import {
+  STILL_SENSITIVITY,
+  copyThumbnail,
+  createThumbnailBuffer,
+  distanceMeters,
+  grabGrayscaleThumbnail,
+  meanAbsDiff,
+} from "../utils/scene-diff.js";
+
+function formatElapsed(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = String(total % 60).padStart(2, "0");
+  return `${minutes}:${seconds}`;
+}
+
+const NO_COMPASS_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M4 4l16 16"/></svg>`;
 
 const ROLLING_WINDOW = 30;
 // Cap the longest edge at 640px so full-resolution camera frames don't exhaust memory on mobile Safari.
 const MAX_INFERENCE_EDGE = 640;
+// Hard cap so live analysis never exceeds 2 completed inferences per second.
+const MIN_INFERENCE_INTERVAL_MS = 500;
+const MIN_CONFIDENCE = 0.2;
+const STILL_MOVE_M = 3;
+const HEARTBEAT_MS = 10_000;
+const SPOT_DECIMALS = 4;
 
-// Coarse-pointer devices (iPad etc.) wait ~700ms between completed inferences so memory can release; desktop stays 0.
+// Coarse-pointer devices (iPad etc.) wait ~700ms between completed inferences so memory can release.
 function resolveInferenceIntervalMs() {
   const coarsePointer =
     typeof window.matchMedia === "function" &&
     window.matchMedia("(pointer: coarse)").matches;
-  return coarsePointer ? 700 : 0;
+  return coarsePointer ? 700 : MIN_INFERENCE_INTERVAL_MS;
 }
 
-const INFERENCE_INTERVAL_MS = resolveInferenceIntervalMs();
+const INFERENCE_INTERVAL_MS = Math.max(
+  MIN_INFERENCE_INTERVAL_MS,
+  resolveInferenceIntervalMs(),
+);
 
 function createLiveMetricsTracker() {
   const inferenceTimes = [];
@@ -107,13 +135,6 @@ function friendlyModelLabel(modelId) {
 
 function formatGpsAccuracy(fix) {
   return fix?.accuracy == null ? "—" : `±${Math.round(fix.accuracy)}m`;
-}
-
-function formatGpsFix(fix) {
-  if (!fix) {
-    return "—";
-  }
-  return `${fix.lat.toFixed(8)}, ${fix.lon.toFixed(8)}\n${formatGpsAccuracy(fix)}`;
 }
 
 // TEMPORARY field-test display: corrected camera heading, plus the raw inputs it came from.
@@ -177,22 +198,46 @@ function createPipelineInputHelper(ctx) {
   };
 }
 
-export function initLiveDetectionPage() {
+export function initLiveDetectionPage(annotate = null) {
   const video = document.getElementById("live-video");
+  const stage = document.getElementById("live-stage");
+  const livePanel = document.getElementById("live-panel");
   const feed = document.getElementById("live-feed");
   const idle = document.getElementById("live-idle");
   const mediaWrap = document.querySelector(".live-stage__media");
   const liveToggle = document.getElementById("btn-live-toggle");
   const mainStart = document.getElementById("btn-live-start-main");
+  const liveStartMobile = document.getElementById("btn-live-start-mobile");
+  const liveStop = document.getElementById("btn-live-stop");
+  const sessionIdle = document.getElementById("session-idle");
+  const sessionLive = document.getElementById("session-live");
   const recordButton = document.getElementById("btn-record");
+  const recordButtonMobile = document.getElementById("btn-record-mobile");
+  const recordButtonLive = document.getElementById("btn-record-live");
   const exportButton = document.getElementById("btn-export");
   const exportMenu = document.getElementById("export-menu");
   const clearButton = document.getElementById("btn-clear-recordings");
+  const changeModelBtn = document.getElementById("btn-change-model");
+  const sessionModelName = document.getElementById("session-model-name");
+  const sessionRunStatus = document.getElementById("session-run-status");
+  const recSub = document.getElementById("rec-sub");
+  const recBadge = document.getElementById("rec-badge");
+  const recBadgeTime = document.getElementById("rec-badge-time");
+  const liveBadge = document.querySelector("[data-live-badge]");
+  const recordRows = document.querySelectorAll(".switchrow");
+  const headingMetric = document.querySelector("[data-heading-metric]");
+  const fpsMetric = document.querySelector("[data-fps-metric]");
+  const detailsSub = document.getElementById("details-sheet-sub");
+  const detailsModelName = document.getElementById("details-model-name");
+  const detailsHeadingOk = document.getElementById("details-heading-ok");
+  const detailsHeadingWarn = document.getElementById("details-heading-warn");
+  const copyCoordsBtn = document.getElementById("btn-copy-coords");
+  const gpsDot = document.querySelector("[data-gps-dot]");
 
   if (
     !video ||
+    !stage ||
     !feed ||
-    !idle ||
     !mediaWrap ||
     !liveToggle ||
     !mainStart ||
@@ -204,6 +249,8 @@ export function initLiveDetectionPage() {
     return;
   }
 
+  const recordSwitches = [recordButtonMobile, recordButtonLive].filter(Boolean);
+
   const metrics = createLiveMetricsTracker();
   const frameCanvas = document.createElement("canvas");
   const frameCtx = frameCanvas.getContext("2d", { willReadFrequently: true });
@@ -214,16 +261,133 @@ export function initLiveDetectionPage() {
   let gpsFix = null;
   let compass = null;
   let headingText = null;
+  let hasCompass = false;
   let backendInfo = null;
   let running = false;
   let busy = false;
   let switchingModel = false;
   let isRecording = false;
+  let recordArmed = false;
   let animationFrameId = null;
   let lastCompletedInferenceAt = 0;
   let frameW = 0;
   let frameH = 0;
   let logGeneration = 0;
+  let sessionStartedAt = 0;
+  let recordingStartedAt = 0;
+  let uiTimerId = null;
+  const thumbBuffer = createThumbnailBuffer();
+  let lastLogThumb = null;
+  let lastLogGps = null;
+  let lastLogAt = 0;
+  const spotLabels = new Map();
+  const stillIndicators = [
+    document.getElementById("still-indicator"),
+    document.querySelector("[data-still-sidebar]"),
+  ].filter(Boolean);
+  const captureCanvas = document.createElement("canvas");
+
+  function setStillPaused(paused) {
+    for (const node of stillIndicators) {
+      node.hidden = !paused;
+      node.classList.toggle("hidden", !paused);
+    }
+  }
+
+  function spotKey(gpsFix) {
+    if (gpsFix?.lat == null || gpsFix?.lon == null) {
+      return "unknown";
+    }
+    return `${gpsFix.lat.toFixed(SPOT_DECIMALS)},${gpsFix.lon.toFixed(SPOT_DECIMALS)}`;
+  }
+
+  function labelsSeenAtSpot(gpsFix) {
+    const key = spotKey(gpsFix);
+    if (!spotLabels.has(key)) {
+      spotLabels.set(key, new Set());
+    }
+    return spotLabels.get(key);
+  }
+
+  function rememberLoggedLabels(detections, gpsFix) {
+    const seen = labelsSeenAtSpot(gpsFix);
+    for (const detection of detections) {
+      const label = String(detection.label ?? "").trim();
+      if (label) {
+        seen.add(label);
+      }
+    }
+  }
+
+  function filterNewForSpot(detections, gpsFix) {
+    const seen = labelsSeenAtSpot(gpsFix);
+    return detections.filter((detection) => {
+      const label = String(detection.label ?? "").trim();
+      return label && !seen.has(label);
+    });
+  }
+
+  function markLoggedFrame(thumb, gpsFix, at) {
+    lastLogThumb = copyThumbnail(thumb);
+    lastLogGps = gpsFix ? { lat: gpsFix.lat, lon: gpsFix.lon } : null;
+    lastLogAt = at;
+  }
+
+  function resetStillState() {
+    lastLogThumb = null;
+    lastLogGps = null;
+    lastLogAt = 0;
+    spotLabels.clear();
+    setStillPaused(false);
+  }
+
+  function logDetectionsIfNeeded(
+    detections,
+    {
+      thumb,
+      gpsFix,
+      orientation,
+      inferenceMs,
+      now,
+      generation,
+      isStill,
+      needsHeartbeat,
+    },
+  ) {
+    if (!isRecording || generation !== logGeneration) {
+      if (!isStill || needsHeartbeat) {
+        markLoggedFrame(thumb, gpsFix, now);
+      }
+      return [];
+    }
+
+    let toLog = detections;
+    if (isStill && !needsHeartbeat) {
+      toLog = filterNewForSpot(detections, gpsFix);
+      if (!toLog.length) {
+        return [];
+      }
+    }
+
+    const logged = toLog.length
+      ? logDetectionFrame({
+          detections: toLog,
+          frameW,
+          frameH,
+          inferenceMs,
+          timestamp: now,
+          gpsFix,
+          orientation,
+          backend: backendInfo,
+          modelId: getModelId(),
+        })
+      : [];
+    if (toLog.length) {
+      rememberLoggedLabels(toLog, gpsFix);
+    }
+    markLoggedFrame(thumb, gpsFix, now);
+    return logged;
+  }
 
   // A metric can appear in both the sidebar and the phone status strip.
   function setMetric(name, value) {
@@ -232,25 +396,117 @@ export function initLiveDetectionPage() {
     }
   }
 
-  function setHeading({ main, detail }) {
+  function setHeading({ main, detail }, available = false) {
     const text = `${main}\n${detail}`;
-    if (text === headingText) {
+    if (text === headingText && available === hasCompass) {
       return;
     }
     headingText = text;
-    setMetric("heading", main);
+    hasCompass = available;
+    // Desktop sidebar keeps plain text; mobile metric strip can show a warn state.
+    setMetric("heading", available ? main : "No compass");
+    if (headingMetric) {
+      if (available) {
+        headingMetric.classList.remove("warn");
+        headingMetric.innerHTML = `<span class="mono">${main}</span>`;
+      } else {
+        headingMetric.classList.add("warn");
+        headingMetric.innerHTML = `${NO_COMPASS_ICON} <span>None</span>`;
+      }
+    }
+    setMetric("heading-main", available ? main : "—");
     setMetric("heading-detail", detail);
+    detailsHeadingOk?.toggleAttribute("hidden", !available);
+    detailsHeadingWarn?.toggleAttribute("hidden", available);
   }
 
   function updateMetricsPanel() {
     const snapshot = metrics.getSnapshot();
     setMetric("instant", formatMetricMs(snapshot.instantMs));
     setMetric("avg", formatMetricMs(snapshot.rollingAvgMs));
-    setMetric("fps", formatMetricFps(snapshot.effectiveFps));
+    const fpsText = running
+      ? formatMetricFps(snapshot.effectiveFps)
+      : "–";
+    setMetric("fps", fpsText);
+    setMetric("fps-detail", fpsText);
+    fpsMetric?.classList.toggle("muted", !running);
     setMetric("frames", String(snapshot.frameCount));
     setMetric("gps", formatGpsFix(gpsFix));
     setMetric("gps-accuracy", formatGpsAccuracy(gpsFix));
+    setMetric("gps-accuracy-detail", formatGpsAccuracy(gpsFix));
     setMetric("logged", String(getLiveDetectionLogCount()));
+    gpsDot?.classList.toggle("is-missing", !gpsFix);
+    if (copyCoordsBtn) {
+      copyCoordsBtn.hidden = !gpsFix;
+    }
+    // Mobile details sheet prefers compact coords in the coords span.
+    for (const node of document.querySelectorAll(".coords[data-metric='gps']")) {
+      node.textContent = formatGpsCoords(gpsFix);
+    }
+    updatePerfBar(snapshot);
+    updateRecordingMetric();
+  }
+
+  function formatGpsFix(fix) {
+    if (!fix) {
+      return "—";
+    }
+    return `${fix.lat.toFixed(8)}, ${fix.lon.toFixed(8)}\n${formatGpsAccuracy(fix)}`;
+  }
+
+  function formatGpsCoords(fix) {
+    if (!fix) {
+      return "—";
+    }
+    return `${fix.lat.toFixed(5)}, ${fix.lon.toFixed(5)}`;
+  }
+
+  function updatePerfBar(snapshot) {
+    const bar = document.querySelector("[data-perf-bar]");
+    const note = document.querySelector("[data-perf-note]");
+    const inf = document.querySelector("[data-perf-inference]");
+    if (!bar || !note || !inf) {
+      return;
+    }
+    const instant = snapshot.instantMs;
+    const avg = snapshot.rollingAvgMs;
+    if (!running || instant == null || avg == null || avg <= 0) {
+      bar.hidden = true;
+      note.hidden = true;
+      return;
+    }
+    const pct = Math.max(1, Math.min(100, Math.round((instant / avg) * 100)));
+    inf.style.width = `${pct}%`;
+    bar.hidden = false;
+    note.hidden = false;
+    note.textContent = `Inference is ${pct}% of each frame. The rest is capture and drawing.`;
+  }
+
+  function updateRecordingMetric() {
+    const node = document.querySelector('[data-metric="recording-state"]');
+    if (!node) {
+      return;
+    }
+    if (isRecording) {
+      node.textContent = `On · ${formatElapsed(Date.now() - recordingStartedAt)}`;
+      node.style.color = "var(--rec)";
+    } else {
+      node.textContent = "Off";
+      node.style.color = "";
+    }
+  }
+
+  function captureFrame() {
+    if (!running || !video.videoWidth || !video.videoHeight) {
+      return null;
+    }
+    const w = 112;
+    const h = Math.max(1, Math.round((video.videoHeight / video.videoWidth) * w));
+    captureCanvas.width = w;
+    captureCanvas.height = h;
+    const ctx = captureCanvas.getContext("2d");
+    ctx.drawImage(video, 0, 0, w, h);
+    return captureCanvas.toDataURL("image/jpeg", 0.7);
   }
 
   function renderClassificationReadout(predictions) {
@@ -273,20 +529,114 @@ export function initLiveDetectionPage() {
     readout.hidden = false;
   }
 
+  function syncRecordSwitches() {
+    const on = isRecording || (!running && recordArmed);
+    for (const button of recordSwitches) {
+      button.setAttribute("aria-checked", String(on));
+    }
+    for (const row of recordRows) {
+      row.classList.toggle("on", on);
+    }
+    if (recSub) {
+      if (isRecording) {
+        recSub.textContent = `Recording · ${formatElapsed(Date.now() - recordingStartedAt)}`;
+      } else if (running) {
+        recSub.textContent = "Start or stop any time";
+      } else if (recordArmed) {
+        recSub.textContent = "Will start with detection";
+      } else {
+        recSub.textContent = "Saves video alongside labels";
+      }
+    }
+    for (const liveSub of document.querySelectorAll(".rec-sub-live")) {
+      liveSub.textContent = isRecording
+        ? `Recording · ${formatElapsed(Date.now() - recordingStartedAt)}`
+        : "Start or stop any time";
+    }
+    if (recBadge && recBadgeTime) {
+      recBadge.hidden = !isRecording;
+      if (isRecording) {
+        recBadgeTime.textContent = `REC ${formatElapsed(Date.now() - recordingStartedAt)}`;
+      }
+    }
+    updateRecordingMetric();
+  }
+
+  function updateSessionChrome() {
+    const modelLabel = friendlyModelLabel(getModelId());
+    if (sessionModelName) {
+      sessionModelName.textContent = modelLabel;
+    }
+    if (detailsModelName) {
+      detailsModelName.textContent = modelLabel;
+    }
+    if (sessionRunStatus) {
+      if (switchingModel) {
+        sessionRunStatus.innerHTML = `<span class="spin"></span>Loading model…`;
+      } else if (running) {
+        sessionRunStatus.textContent = `Running · ${formatElapsed(Date.now() - sessionStartedAt)}`;
+      }
+    }
+    if (changeModelBtn) {
+      changeModelBtn.disabled = switchingModel;
+    }
+    if (detailsSub) {
+      detailsSub.textContent = running ? "Updating live" : "Last session";
+    }
+  }
+
   function updateControls() {
+    // Desktop header + idle controls
     liveToggle.textContent = running
       ? "Stop Live Detection"
       : "Start Live Detection";
     liveToggle.setAttribute("aria-pressed", String(running));
+    liveToggle.disabled = switchingModel;
+    if (mainStart) {
+      mainStart.disabled = switchingModel || running;
+    }
     recordButton.disabled = !running;
     recordButton.textContent = isRecording
       ? "Stop Recording"
       : "Start Recording";
     recordButton.setAttribute("aria-pressed", String(isRecording));
     recordButton.classList.toggle("btn--record-active", isRecording);
+
+    // Shared camera visibility
     feed.hidden = !running;
-    idle.hidden = running;
+    if (idle) {
+      idle.hidden = running;
+    }
+    livePanel?.classList.toggle("is-live", running);
+    if (liveBadge) {
+      liveBadge.hidden = !running;
+    }
+
+    // Mobile session card
+    if (sessionIdle) {
+      sessionIdle.hidden = running;
+    }
+    if (sessionLive) {
+      sessionLive.hidden = !running;
+    }
+    if (liveStartMobile) {
+      liveStartMobile.disabled = switchingModel || running;
+    }
+    if (liveStop) {
+      liveStop.disabled = switchingModel || !running;
+    }
+
     clearButton.disabled = getRecordings().length === 0;
+    syncRecordSwitches();
+    updateSessionChrome();
+  }
+
+  function tickUiClocks() {
+    if (!running && !isRecording) {
+      return;
+    }
+    updateSessionChrome();
+    syncRecordSwitches();
   }
 
   function stopStream() {
@@ -304,9 +654,8 @@ export function initLiveDetectionPage() {
       stopRecording();
     }
     isRecording = false;
+    recordArmed = false;
     setLiveDetectionActive(false);
-    gps?.stop();
-    gps = null;
     compass?.stop();
     compass = null;
     if (animationFrameId !== null) {
@@ -316,7 +665,16 @@ export function initLiveDetectionPage() {
     stopStream();
     mediaWrap.querySelector(".bounding-boxes")?.remove();
     renderClassificationReadout(null);
+    annotate?.setSuggestions([]);
+    setHeading(formatHeading(null), false);
     updateControls();
+    updateMetricsPanel();
+    annotate?.setLiveAnnotateState({
+      running: false,
+      orientation: null,
+      gpsFix,
+    });
+    setStillPaused(false);
   }
 
   async function tick() {
@@ -352,17 +710,42 @@ export function initLiveDetectionPage() {
     frameCtx.drawImage(video, 0, 0, frameW, frameH);
     // Captured with the frame, not after inference: heading changes faster than GPS.
     const orientation = compass?.getReading() ?? null;
+    const gpsNow = gps?.getFix() ?? null;
     // A frame grabbed before the log is cleared is not logged after it.
     const generation = logGeneration;
 
     const { parameters } = getSettings();
+    const confidenceFloor = Math.max(MIN_CONFIDENCE, parameters.confidence);
+    const madThreshold =
+      STILL_SENSITIVITY[parameters.stillSensitivity] ?? STILL_SENSITIVITY.medium;
+    const thumb = grabGrayscaleThumbnail(frameCanvas, thumbBuffer);
+    const now = Date.now();
+    const sceneDiff = meanAbsDiff(thumb, lastLogThumb);
+    const movedM = distanceMeters(gpsNow, lastLogGps);
+    const isStill =
+      lastLogThumb != null &&
+      sceneDiff < madThreshold &&
+      movedM < STILL_MOVE_M;
+    const needsHeartbeat =
+      lastLogAt === 0 || now - lastLogAt >= HEARTBEAT_MS;
+
+    if (isStill && parameters.skipWhenStill && !needsHeartbeat) {
+      setStillPaused(true);
+      lastCompletedInferenceAt = performance.now();
+      busy = false;
+      return;
+    }
+    setStillPaused(false);
+
     const t0 = performance.now();
     const task = getModelTask();
     const input = canvasToPipelineInput(frameCanvas);
 
     try {
       if (task === "classification") {
-        const predictions = await classifyImageFromSource(input, { topK: 3 });
+        const predictions = (
+          await classifyImageFromSource(input, { topK: 3 })
+        ).filter((item) => item.score >= confidenceFloor);
         const inferenceMs = performance.now() - t0;
         lastCompletedInferenceAt = performance.now();
         console.log(`[TIMING] live: ${inferenceMs.toFixed(0)}ms`);
@@ -370,27 +753,35 @@ export function initLiveDetectionPage() {
         mediaWrap.querySelector(".bounding-boxes")?.remove();
         renderClassificationReadout(predictions);
 
-        if (isRecording && generation === logGeneration) {
-          logDetectionFrame({
-            detections: predictions.map((item) => ({
-              label: item.label,
-              score: item.score,
-              rank: item.rank,
-              box: null,
-            })),
-            frameW,
-            frameH,
-            inferenceMs,
-            timestamp: Date.now(),
-            gpsFix: gps?.getFix() ?? null,
-            orientation,
-            backend: backendInfo,
-            modelId: getModelId(),
-          });
-        }
+        const classDetections = predictions.map((item) => ({
+          label: item.label,
+          score: item.score,
+          rank: item.rank,
+          box: null,
+        }));
+        const classLogged = logDetectionsIfNeeded(classDetections, {
+          thumb,
+          gpsFix: gpsNow,
+          orientation,
+          inferenceMs,
+          now,
+          generation,
+          isStill,
+          needsHeartbeat,
+        });
+        annotate?.noteLiveLabels(
+          classDetections.map((item, index) => ({
+            label: item.label,
+            rowId: classLogged[index]?.id ?? null,
+          })),
+        );
+        annotate?.setSuggestions(
+          predictions.map((item) => ({ label: item.label, score: item.score })),
+        );
+        annotate?.setLiveAnnotateState({ orientation, gpsFix: gpsNow });
       } else {
         const rawDetections = await detectObjectsFromSource(input, {
-          threshold: parameters.confidence,
+          threshold: confidenceFloor,
           maxObjects: parameters.maxObjects,
         });
         const inferenceMs = performance.now() - t0;
@@ -398,11 +789,10 @@ export function initLiveDetectionPage() {
         console.log(`[TIMING] live: ${inferenceMs.toFixed(0)}ms`);
         metrics.recordInferenceMs(inferenceMs);
         const cameraHeading = orientation?.cameraHeading ?? null;
-        const gpsFix = gps?.getFix() ?? null;
         const detections = rawDetections.map((detection) => {
           const bearing = objectBearing(detection.box, frameW, frameH, cameraHeading);
           const distance = estimateDistance(detection.label, detection.box, frameW, frameH);
-          const estimate = projectPosition(gpsFix, bearing, distance, orientation);
+          const estimate = projectPosition(gpsNow, bearing, distance, orientation);
           return {
             ...detection,
             bearing,
@@ -415,19 +805,26 @@ export function initLiveDetectionPage() {
         renderClassificationReadout(null);
         renderBoundingBoxesOnContainer(mediaWrap, detections, frameCanvas);
 
-        if (isRecording && generation === logGeneration) {
-          logDetectionFrame({
-            detections,
-            frameW,
-            frameH,
-            inferenceMs,
-            timestamp: Date.now(),
-            gpsFix,
-            orientation,
-            backend: backendInfo,
-            modelId: getModelId(),
-          });
-        }
+        const logged = logDetectionsIfNeeded(detections, {
+          thumb,
+          gpsFix: gpsNow,
+          orientation,
+          inferenceMs,
+          now,
+          generation,
+          isStill,
+          needsHeartbeat,
+        });
+        annotate?.noteLiveLabels(
+          detections.map((item, index) => ({
+            label: item.label,
+            rowId: logged[index]?.id ?? null,
+          })),
+        );
+        annotate?.setSuggestions(
+          detections.map((item) => ({ label: item.label, score: item.score })),
+        );
+        annotate?.setLiveAnnotateState({ orientation, gpsFix: gpsNow });
       }
       updateMetricsPanel();
     } catch (error) {
@@ -452,7 +849,6 @@ export function initLiveDetectionPage() {
     const compassPermission = requestCompassPermission();
 
     liveToggle.disabled = true;
-    mainStart.disabled = true;
     setModelPickersDisabled(true);
     try {
       // Model before camera: building a GPU model while the camera is open can crash mobile Chrome.
@@ -465,33 +861,44 @@ export function initLiveDetectionPage() {
       stream = await requestCameraStream();
       setLiveDetectionActive(true);
       backendInfo = await getObjectDetectorBackend();
-      setMetric("backend", `${backendInfo.device} · ${backendInfo.dtype}`);
+      setMetric(
+        "backend",
+        `${backendInfo.device}${backendInfo.dtype ? ` · ${backendInfo.dtype}` : ""}`,
+      );
 
       metrics.reset();
-      gpsFix = null;
       lastCompletedInferenceAt = 0;
+      resetStillState();
+      ensureGps();
       updateMetricsPanel();
 
-      gps = createGpsTracker((fix) => {
-        gpsFix = fix;
-        updateMetricsPanel();
-      });
-      gps.start();
-
       headingText = null;
-      setHeading(formatHeading(null));
+      setHeading(formatHeading(null), false);
 
       video.srcObject = stream;
       await video.play();
       running = true;
+      sessionStartedAt = Date.now();
+      if (recordArmed && !isRecording) {
+        isRecording = true;
+        recordingStartedAt = Date.now();
+        startRecording(getModelId());
+      }
       updateControls();
+      annotate?.setLiveAnnotateState({
+        running: true,
+        gpsFix,
+        backend: backendInfo,
+        captureFrame,
+      });
       compassPermission.then((state) => {
         if (state !== "granted" || !running || compass) {
           return;
         }
-        compass = createCompassTracker((reading) =>
-          setHeading(formatHeading(reading)),
-        );
+        compass = createCompassTracker((reading) => {
+          setHeading(formatHeading(reading), reading?.heading != null);
+          annotate?.setLiveAnnotateState({ orientation: reading });
+        });
         compass.start();
       });
       console.log(`[LIVE] INFERENCE_INTERVAL_MS=${INFERENCE_INTERVAL_MS}`);
@@ -503,14 +910,25 @@ export function initLiveDetectionPage() {
       console.error("[LIVE] start failed:", error);
     } finally {
       liveToggle.disabled = false;
-      mainStart.disabled = false;
       setModelPickersDisabled(false);
     }
   }
 
+  function ensureGps() {
+    if (gps) {
+      return;
+    }
+    gps = createGpsTracker((fix) => {
+      gpsFix = fix;
+      updateMetricsPanel();
+      annotate?.setLiveAnnotateState({ gpsFix: fix });
+    });
+    gps.start();
+  }
+
   function setModelLoading(modelId) {
     const overlay = document.getElementById("model-loading");
-    const label = overlay?.querySelector(".live-stage__loading-label");
+    const label = overlay?.querySelector(".cam__loading-label");
     if (!overlay || !label) {
       return;
     }
@@ -520,6 +938,7 @@ export function initLiveDetectionPage() {
     } else {
       overlay.hidden = true;
     }
+    updateSessionChrome();
   }
 
   function handleExport(exporter) {
@@ -547,6 +966,8 @@ export function initLiveDetectionPage() {
     isRecording = false;
     logGeneration += 1;
     clearLiveDetectionLog();
+    annotate?.resetLabels();
+    resetStillState();
     updateControls();
     updateMetricsPanel();
   }
@@ -573,19 +994,66 @@ export function initLiveDetectionPage() {
     }
   });
   mainStart.addEventListener("click", startLiveDetection);
+  liveStartMobile?.addEventListener("click", startLiveDetection);
+  liveStop?.addEventListener("click", () => {
+    if (running) {
+      stopLiveDetection();
+    }
+  });
+
+  // Desktop header record button: only while running
   recordButton.addEventListener("click", () => {
     if (!running) {
       return;
     }
     isRecording = !isRecording;
     if (isRecording) {
+      recordingStartedAt = Date.now();
       startRecording(getModelId());
     } else {
       stopRecording();
     }
+    recordArmed = isRecording;
     updateControls();
   });
+
+  // Mobile record switches: can arm while idle, toggle while live
+  function toggleMobileRecording() {
+    if (running) {
+      isRecording = !isRecording;
+      if (isRecording) {
+        recordingStartedAt = Date.now();
+        startRecording(getModelId());
+      } else {
+        stopRecording();
+      }
+      recordArmed = isRecording;
+    } else {
+      recordArmed = !recordArmed;
+    }
+    updateControls();
+  }
+
+  for (const button of recordSwitches) {
+    button.addEventListener("click", toggleMobileRecording);
+  }
+
   clearButton.addEventListener("click", clearRecordings);
+  copyCoordsBtn?.addEventListener("click", async () => {
+    if (!gpsFix) {
+      return;
+    }
+    const text = `${gpsFix.lat.toFixed(8)}, ${gpsFix.lon.toFixed(8)}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      copyCoordsBtn.textContent = "Copied";
+      window.setTimeout(() => {
+        copyCoordsBtn.textContent = "Copy";
+      }, 1200);
+    } catch {
+      showCameraFeedback("Could not copy coordinates");
+    }
+  });
   exportButton.addEventListener("click", () => {
     if (exportMenu.hidden) {
       openExportMenu();
@@ -623,21 +1091,35 @@ export function initLiveDetectionPage() {
       exportButton.focus();
     }
   });
-  window.addEventListener("pagehide", stopLiveDetection);
+  window.addEventListener("pagehide", () => {
+    stopLiveDetection();
+    gps?.stop();
+    gps = null;
+  });
 
   async function handleModelSelect(modelId) {
+    const wasRunning = running;
     switchingModel = true;
     setModelLoading(modelId);
     setModelPickersDisabled(true);
+    updateControls();
     try {
       while (busy) {
         await new Promise((resolve) => requestAnimationFrame(resolve));
       }
       await setDetectionModel(modelId);
       backendInfo = await getObjectDetectorBackend();
-      setMetric("backend", `${backendInfo.device} · ${backendInfo.dtype}`);
+      setMetric(
+        "backend",
+        `${backendInfo.device}${backendInfo.dtype ? ` · ${backendInfo.dtype}` : ""}`,
+      );
       mediaWrap.querySelector(".bounding-boxes")?.remove();
       renderClassificationReadout(null);
+      annotate?.setSuggestions([]);
+      annotate?.setLiveAnnotateState({ backend: backendInfo });
+      if (wasRunning) {
+        showCameraFeedback(`Switched to ${friendlyModelLabel(modelId)}`);
+      }
     } catch (error) {
       console.error("[LIVE] model switch failed:", error);
       showCameraFeedback("Could not load that model");
@@ -646,10 +1128,25 @@ export function initLiveDetectionPage() {
       switchingModel = false;
       setModelLoading(null);
       setModelPickersDisabled(false);
+      updateControls();
+      updateMetricsPanel();
     }
   }
 
   initModelPicker(handleModelSelect);
+  initModelsSheet({
+    getModels: () => MODEL_OPTIONS,
+    getSelectedId: getModelId,
+    onSelect: (modelId) => {
+      syncModelPickers(modelId);
+      handleModelSelect(modelId);
+    },
+  });
+  initStillSettings();
+  ensureGps();
+  setHeading(formatHeading(null), false);
+  annotate?.setLiveAnnotateState({ captureFrame, gpsFix });
   updateControls();
   updateMetricsPanel();
+  uiTimerId = window.setInterval(tickUiClocks, 1000);
 }

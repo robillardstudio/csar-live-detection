@@ -205,6 +205,8 @@ export async function setDetectionModel(modelId) {
   }
 
   const previousId = MODEL_ID;
+  const previousDetector = models.objectDetector;
+  const previousClassifier = models.classifier;
   MODEL_ID = modelId;
   models.objectDetector = null;
   models.classifier = null;
@@ -214,10 +216,34 @@ export async function setDetectionModel(modelId) {
   delete loadingPromises.classifier;
 
   try {
-    return await loadModel(slot);
+    const next = await loadModel(slot);
+    // Free the previous pipelines only after the new one is ready so a mid-session
+    // switch can keep recording/labels going without a gap on the new model.
+    disposePipeline(previousDetector);
+    disposePipeline(previousClassifier);
+    return next;
   } catch (error) {
     MODEL_ID = previousId;
+    models.objectDetector = previousDetector;
+    models.classifier = previousClassifier;
+    if (previousDetector) {
+      setModelStatus("objectDetector", "ready");
+    }
+    if (previousClassifier) {
+      setModelStatus("classifier", "ready");
+    }
     await loadModel(getActiveSlot()).catch(() => {});
     throw error;
+  }
+}
+
+function disposePipeline(pipelineInstance) {
+  if (!pipelineInstance) {
+    return;
+  }
+  try {
+    pipelineInstance.dispose?.();
+  } catch {
+    // Best-effort; dropping the reference still lets the GC reclaim WASM/GPU memory.
   }
 }

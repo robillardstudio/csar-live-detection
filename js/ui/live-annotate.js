@@ -1,0 +1,732 @@
+// Live-mode co-annotation: label list, FAB add sheet, row actions, undo toast.
+import {
+  findLatestAiRowForLabel,
+  logUserAction,
+  onLiveDetectionLogCleared,
+  removeUserLogRow,
+} from "../live/detection-log.js";
+import { getModelId } from "../models.js";
+
+const TOAST_MS = 3200;
+
+function formatAgo(ms, now) {
+  const seconds = Math.max(0, Math.round((now - ms) / 1000));
+  if (seconds < 60) {
+    return `${seconds}s ago`;
+  }
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes} min ago`;
+  }
+  const hours = Math.round(minutes / 60);
+  return `${hours} hr ago`;
+}
+
+function formatCoords(gpsFix) {
+  if (gpsFix?.lat == null || gpsFix?.lon == null) {
+    return "Location unavailable";
+  }
+  return `${gpsFix.lat.toFixed(5)}, ${gpsFix.lon.toFixed(5)}`;
+}
+
+export function initLiveAnnotate() {
+  const desktopHost = document.getElementById("ai-labels-desktop-host");
+  const phoneHost = document.getElementById("ai-labels-phone-host");
+  const fab = document.getElementById("btn-add-label");
+  if (!desktopHost || !phoneHost) {
+    return null;
+  }
+
+  const panel = document.createElement("section");
+  panel.className = "live-card ai-labels";
+  panel.innerHTML = `
+    <div class="list-head">
+      <h4>Labels <span class="muted" data-annotate-count style="font-weight:500">· 0</span></h4>
+      <button type="button" class="btn btn--secondary desktop-only" data-annotate-add-desktop>Add label</button>
+    </div>
+    <p class="ai-labels__hint" data-annotate-hint></p>
+    <ul class="ai-labels__list" data-annotate-list aria-label="Labels"></ul>
+  `;
+
+  const listEl = panel.querySelector("[data-annotate-list]");
+  const hintEl = panel.querySelector("[data-annotate-hint]");
+  const countEl = panel.querySelector("[data-annotate-count]");
+  const desktopAddBtn = panel.querySelector("[data-annotate-add-desktop]");
+
+  function placePanel() {
+    const phone = window.matchMedia("(max-width: 767px)").matches;
+    panel.classList.toggle("card", phone);
+    panel.classList.toggle("live-card", !phone);
+    (phone ? phoneHost : desktopHost).appendChild(panel);
+  }
+
+  placePanel();
+  window.addEventListener("resize", placePanel);
+
+  const sheet = document.createElement("div");
+  sheet.className = "sheet annotate-sheet";
+  sheet.hidden = true;
+  sheet.setAttribute("role", "dialog");
+  sheet.setAttribute("aria-modal", "true");
+  sheet.innerHTML = `
+    <div class="grab" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <div>
+        <h2 data-sheet-title>New label</h2>
+        <small data-sheet-sub></small>
+      </div>
+      <button type="button" class="x" data-annotate-cancel aria-label="Close">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="sheet-body">
+      <div class="frame" data-frame>
+        <div class="thumb nof" data-thumb></div>
+        <div>
+          <b data-frame-title>No frame attached</b>
+          <small data-frame-meta>Saved with your location only. Start detection to attach a frame.</small>
+        </div>
+      </div>
+      <span class="eyebrow" data-chips-label>Recent labels</span>
+      <div class="chips" data-chips></div>
+      <label class="field">
+        <span class="eyebrow">Or type a label</span>
+        <input class="input" id="annotate-input" type="text" autocomplete="off" enterkeyhint="done" data-annotate-input placeholder="e.g. trench coat">
+      </label>
+      <button type="button" class="btn btn-primary" data-annotate-save>Save label</button>
+    </div>
+  `;
+  const scrim = document.createElement("div");
+  scrim.className = "scrim";
+  scrim.hidden = true;
+
+  const toast = document.createElement("div");
+  toast.className = "annotate-toast";
+  toast.hidden = true;
+  toast.setAttribute("role", "status");
+  toast.innerHTML = `
+    <span data-toast-text>Deleted</span>
+    <button type="button" class="annotate-toast__undo" data-toast-undo>Undo</button>
+  `;
+
+  document.body.append(scrim, sheet, toast);
+
+  const titleEl = sheet.querySelector("[data-sheet-title]");
+  const subEl = sheet.querySelector("[data-sheet-sub]");
+  const thumbEl = sheet.querySelector("[data-thumb]");
+  const frameTitle = sheet.querySelector("[data-frame-title]");
+  const frameMeta = sheet.querySelector("[data-frame-meta]");
+  const chipsLabel = sheet.querySelector("[data-chips-label]");
+  const chipsEl = sheet.querySelector("[data-chips]");
+  const input = sheet.querySelector("[data-annotate-input]");
+  const cancelBtn = sheet.querySelector("[data-annotate-cancel]");
+  const saveBtn = sheet.querySelector("[data-annotate-save]");
+  const toastText = toast.querySelector("[data-toast-text]");
+  const toastUndo = toast.querySelector("[data-toast-undo]");
+
+  const byLabel = new Map();
+  const order = [];
+  const pendingNew = [];
+  let selectedLabel = null;
+  let pointerOver = false;
+  let running = false;
+  let gpsFix = null;
+  let orientation = null;
+  let backend = null;
+  let suggestions = [];
+  let captureFrame = null;
+  let sheetOpen = false;
+  let sheetMode = "add"; // add | replace
+  let pick = null;
+  let toastTimer = null;
+  let toastRowId = null;
+  let undoFn = null;
+
+  function isPinned() {
+    return selectedLabel != null || pointerOver;
+  }
+
+  function flushPending() {
+    if (!pendingNew.length || isPinned()) {
+      return;
+    }
+    for (const entry of pendingNew.splice(0).reverse()) {
+      order.unshift(entry);
+    }
+  }
+
+  function setFabHidden(hidden) {
+    fab?.classList.toggle("is-hidden", hidden);
+  }
+
+  function openAddFlow() {
+    selectedLabel = null;
+    openSheet("add");
+  }
+
+  function syncHint() {
+    hintEl.textContent = running
+      ? ""
+      : "Detection is off, so labels you add now are saved without a frame.";
+    hintEl.hidden = !hintEl.textContent;
+    countEl.textContent = `· ${order.length}`;
+    const labelCount = document.querySelector('[data-metric="label-count"]');
+    if (labelCount) {
+      labelCount.textContent = String(order.length);
+    }
+  }
+
+  function resolveRef(label) {
+    const entry = byLabel.get(label);
+    const refersToRow =
+      entry?.latestRowId ?? findLatestAiRowForLabel(label)?.id ?? null;
+    return { refersToLabel: label, refersToRow };
+  }
+
+  function renderChips() {
+    chipsEl.replaceChildren();
+    const items = running
+      ? suggestions.slice(0, 5).map((item) => [item.label, item.score])
+      : order.slice(0, 4).map((entry) => [entry.label, null]);
+
+    chipsLabel.textContent = running ? "Model suggestions" : "Recent labels";
+
+    for (const [name, score] of items) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "chip";
+      chip.dataset.pick = name;
+      chip.setAttribute("aria-pressed", String(pick === name));
+      chip.innerHTML =
+        score == null
+          ? name
+          : `${name}<em class="mono">${Math.round(score * 100)}%</em>`;
+      chipsEl.appendChild(chip);
+    }
+  }
+
+  function syncFramePreview() {
+    const dataUrl = running && typeof captureFrame === "function" ? captureFrame() : null;
+    thumbEl.classList.toggle("nof", !dataUrl);
+    thumbEl.replaceChildren();
+    if (dataUrl) {
+      const img = document.createElement("img");
+      img.src = dataUrl;
+      img.alt = "";
+      thumbEl.appendChild(img);
+      frameTitle.textContent = "Current frame";
+      frameMeta.textContent = `${formatCoords(gpsFix)} · just now`;
+      frameMeta.classList.add("mono");
+    } else {
+      frameTitle.textContent = "No frame attached";
+      frameMeta.textContent =
+        "Saved with your location only. Start detection to attach a frame.";
+      frameMeta.classList.remove("mono");
+    }
+  }
+
+  function openSheet(mode = "add") {
+    sheetMode = mode;
+    pick = null;
+    const replacing = mode === "replace" ? selectedLabel : null;
+    titleEl.textContent = replacing ? "Replace label" : "New label";
+    subEl.textContent = replacing
+      ? `Replacing “${replacing}”`
+      : running
+        ? "Tag what’s in the current frame"
+        : "Log something you’ve seen";
+    saveBtn.textContent = replacing ? "Replace label" : "Save label";
+    input.value = replacing ?? "";
+    syncFramePreview();
+    renderChips();
+    sheet.hidden = false;
+    scrim.hidden = false;
+    sheet.classList.add("is-mounted");
+    scrim.classList.add("is-mounted");
+    sheetOpen = true;
+    setFabHidden(true);
+    hideToast(false);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        sheet.classList.add("open");
+        scrim.classList.add("on");
+      });
+    });
+    input.focus();
+    if (replacing) {
+      input.select();
+    }
+  }
+
+  function closeSheet() {
+    sheet.classList.remove("open");
+    scrim.classList.remove("on");
+    sheetOpen = false;
+    pick = null;
+    const finish = () => {
+      if (!sheetOpen) {
+        sheet.classList.remove("is-mounted");
+        scrim.classList.remove("is-mounted");
+        sheet.hidden = true;
+        scrim.hidden = true;
+      }
+    };
+    sheet.addEventListener("transitionend", finish, { once: true });
+    window.setTimeout(finish, 360);
+    if (!toastTimer) {
+      setFabHidden(false);
+    }
+  }
+
+  function hideToast(showFab = true) {
+    if (toastTimer != null) {
+      clearTimeout(toastTimer);
+      toastTimer = null;
+    }
+    toastRowId = null;
+    undoFn = null;
+    toast.classList.remove("on");
+    window.setTimeout(() => {
+      if (!toast.classList.contains("on")) {
+        toast.classList.remove("is-mounted");
+        toast.hidden = true;
+      }
+    }, 220);
+    if (showFab && !sheetOpen) {
+      setFabHidden(false);
+    }
+  }
+
+  function showToast(message, undo = null) {
+    hideToast(false);
+    toastRowId = null;
+    undoFn = undo;
+    toastText.textContent = message;
+    toastUndo.hidden = !undo;
+    toast.hidden = false;
+    toast.classList.add("is-mounted");
+    setFabHidden(true);
+    requestAnimationFrame(() => toast.classList.add("on"));
+    toastTimer = setTimeout(() => hideToast(true), TOAST_MS);
+  }
+
+  function createLabelItem(entry, now) {
+    const item = document.createElement("li");
+    item.className = "ai-labels__item";
+    item.dataset.label = entry.label;
+    item.setAttribute("role", "button");
+    item.tabIndex = 0;
+    item.setAttribute("aria-expanded", "false");
+    updateLabelItem(item, entry, now);
+    return item;
+  }
+
+  function updateLabelItem(item, entry, now) {
+    const selected = entry.label === selectedLabel;
+    item.classList.toggle("ai-labels__item--selected", selected);
+    item.setAttribute("aria-expanded", String(selected));
+
+    item.replaceChildren();
+    const r1 = document.createElement("div");
+    r1.className = "r1";
+    const name = document.createElement("span");
+    name.className = "ai-labels__name";
+    name.textContent = entry.label;
+    const count = document.createElement("span");
+    count.className = "ai-labels__count mono";
+    count.dataset.count = entry.label;
+    count.textContent = String(entry.count);
+    r1.append(name, count);
+
+    const meta = document.createElement("div");
+    meta.className = "ai-labels__meta";
+    meta.textContent = `Last seen ${formatAgo(entry.lastSeen, now)}`;
+
+    item.append(r1, meta);
+
+    if (!selected) {
+      return;
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "ai-labels__actions";
+    actions.innerHTML = `
+      <button type="button" class="a" data-act="addto" ${running ? "" : "disabled"} aria-label="Add current frame to ${entry.label}">Add to</button>
+      <button type="button" class="a" data-act="replace" ${running ? "" : "disabled"} aria-label="Replace ${entry.label}">Replace</button>
+      <button type="button" class="a del" data-act="del" aria-label="Delete ${entry.label}">Delete</button>
+    `;
+    item.append(actions);
+    if (!running) {
+      const note = document.createElement("p");
+      note.className = "ai-labels__actions-note";
+      note.textContent =
+        "Add to and Replace use the live frame. Start detection to use them.";
+      item.append(note);
+    }
+  }
+
+  function renderList(now = Date.now()) {
+    flushPending();
+    const pinned = isPinned();
+    const nodes = [...listEl.querySelectorAll("[data-label]")];
+    const byNode = new Map(nodes.map((node) => [node.dataset.label, node]));
+
+    if (!pinned) {
+      listEl.replaceChildren(
+        ...order.map((entry) => {
+          const existing = byNode.get(entry.label);
+          if (existing) {
+            updateLabelItem(existing, entry, now);
+            return existing;
+          }
+          return createLabelItem(entry, now);
+        }),
+      );
+    } else {
+      for (const entry of order) {
+        const existing = byNode.get(entry.label);
+        if (existing) {
+          updateLabelItem(existing, entry, now);
+        }
+      }
+    }
+    syncHint();
+  }
+
+  function bumpCount(label) {
+    const count = listEl.querySelector(`[data-count="${CSS.escape(label)}"]`);
+    if (!count) {
+      return;
+    }
+    count.classList.add("bump");
+    window.setTimeout(() => count.classList.remove("bump"), 200);
+  }
+
+  function commitAction(kind, labelText) {
+    const selected = selectedLabel;
+
+    if (kind === "addto") {
+      if (!running || !selected) {
+        return;
+      }
+      const { refersToLabel, refersToRow } = resolveRef(selected);
+      logUserAction({
+        action: "add",
+        label: selected,
+        refersToLabel,
+        refersToRow,
+        gpsFix,
+        orientation,
+        modelId: getModelId(),
+        backend,
+      });
+      const entry = byLabel.get(selected);
+      if (entry) {
+        entry.count += 1;
+        entry.lastSeen = Date.now();
+      }
+      renderList();
+      bumpCount(selected);
+      showToast(`Added frame to ${selected}`);
+      return;
+    }
+
+    if (kind === "delete") {
+      if (!selected) {
+        return;
+      }
+      const { refersToLabel, refersToRow } = resolveRef(selected);
+      const removed = byLabel.get(selected);
+      const index = order.findIndex((entry) => entry.label === selected);
+      const row = logUserAction({
+        action: "delete",
+        label: "",
+        refersToLabel,
+        refersToRow,
+        gpsFix,
+        orientation,
+        modelId: getModelId(),
+        backend,
+      });
+      if (removed && index >= 0) {
+        order.splice(index, 1);
+        byLabel.delete(selected);
+      }
+      selectedLabel = null;
+      renderList();
+      showToast(`Deleted “${removed?.label ?? refersToLabel}”`, () => {
+        if (row?.id != null) {
+          removeUserLogRow(row.id);
+        }
+        if (removed && index >= 0) {
+          byLabel.set(removed.label, removed);
+          order.splice(index, 0, removed);
+          selectedLabel = removed.label;
+          renderList();
+        }
+      });
+      return;
+    }
+
+    if (kind === "replace") {
+      if (!running || !selected) {
+        return;
+      }
+      const { refersToLabel, refersToRow } = resolveRef(selected);
+      logUserAction({
+        action: "replace",
+        label: labelText,
+        refersToLabel,
+        refersToRow,
+        gpsFix,
+        orientation,
+        modelId: getModelId(),
+        backend,
+      });
+      const entry = byLabel.get(selected);
+      if (entry) {
+        byLabel.delete(selected);
+        entry.label = labelText;
+        entry.lastSeen = Date.now();
+        byLabel.set(labelText, entry);
+        selectedLabel = labelText;
+      }
+      closeSheet();
+      renderList();
+      showToast(`Replaced “${selected}” with “${labelText}”`);
+      return;
+    }
+
+    // New label (FAB / idle or live)
+    const row = logUserAction({
+      action: "add",
+      label: labelText,
+      refersToLabel: null,
+      refersToRow: null,
+      gpsFix,
+      orientation,
+      modelId: getModelId(),
+      backend,
+    });
+    const existing = byLabel.get(labelText);
+    if (existing) {
+      existing.count += 1;
+      existing.lastSeen = Date.now();
+      if (row?.id != null) {
+        existing.latestRowId = row.id;
+      }
+    } else {
+      const entry = {
+        label: labelText,
+        count: 1,
+        lastSeen: Date.now(),
+        latestRowId: row?.id ?? null,
+      };
+      byLabel.set(labelText, entry);
+      order.unshift(entry);
+    }
+    selectedLabel = null;
+    closeSheet();
+    renderList();
+    bumpCount(labelText);
+    showToast(`Saved “${labelText}”`);
+  }
+
+  function noteLiveLabels(items) {
+    if (!items?.length) {
+      return;
+    }
+    const now = Date.now();
+    for (const item of items) {
+      const label = String(item.label ?? "").trim();
+      if (!label) {
+        continue;
+      }
+      let entry = byLabel.get(label);
+      if (entry) {
+        entry.count += 1;
+        entry.lastSeen = now;
+        if (item.rowId != null) {
+          entry.latestRowId = item.rowId;
+        }
+      } else {
+        entry = {
+          label,
+          count: 1,
+          lastSeen: now,
+          latestRowId: item.rowId ?? null,
+        };
+        byLabel.set(label, entry);
+        if (isPinned()) {
+          pendingNew.push(entry);
+        } else {
+          order.unshift(entry);
+        }
+      }
+    }
+    renderList(now);
+  }
+
+  function setSuggestions(next) {
+    suggestions = Array.isArray(next) ? next : [];
+    if (sheetOpen && running) {
+      renderChips();
+    }
+  }
+
+  function setLiveAnnotateState(next) {
+    if ("running" in next) {
+      running = Boolean(next.running);
+    }
+    if ("gpsFix" in next) {
+      gpsFix = next.gpsFix;
+    }
+    if ("orientation" in next) {
+      orientation = next.orientation;
+    }
+    if ("backend" in next) {
+      backend = next.backend;
+    }
+    if ("captureFrame" in next) {
+      captureFrame = next.captureFrame;
+    }
+    if (selectedLabel) {
+      renderList();
+    } else {
+      syncHint();
+    }
+  }
+
+  function resetLabels() {
+    byLabel.clear();
+    order.length = 0;
+    pendingNew.length = 0;
+    selectedLabel = null;
+    suggestions = [];
+    listEl.replaceChildren();
+    hideToast(true);
+    closeSheet();
+    syncHint();
+  }
+
+  listEl.addEventListener("pointerenter", () => {
+    pointerOver = true;
+  });
+  listEl.addEventListener("pointerleave", () => {
+    pointerOver = false;
+    renderList();
+  });
+
+  listEl.addEventListener("click", (event) => {
+    const act = event.target.closest("[data-act]");
+    if (act) {
+      event.preventDefault();
+      event.stopPropagation();
+      const action = act.dataset.act;
+      if (action === "addto") {
+        if (!running || act.disabled) {
+          return;
+        }
+        commitAction("addto", selectedLabel);
+        return;
+      }
+      if (action === "replace") {
+        if (!running || act.disabled) {
+          return;
+        }
+        openSheet("replace");
+        return;
+      }
+      if (action === "del") {
+        commitAction("delete", "");
+        return;
+      }
+    }
+
+    const item = event.target.closest("[data-label]");
+    if (!item) {
+      return;
+    }
+    selectedLabel =
+      selectedLabel === item.dataset.label ? null : item.dataset.label;
+    renderList();
+  });
+
+  listEl.addEventListener("keydown", (event) => {
+    if (
+      (event.key === "Enter" || event.key === " ") &&
+      event.target.matches(".ai-labels__item")
+    ) {
+      event.preventDefault();
+      event.target.click();
+    }
+  });
+
+  fab?.addEventListener("click", openAddFlow);
+  desktopAddBtn?.addEventListener("click", openAddFlow);
+
+  chipsEl.addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-pick]");
+    if (!chip) {
+      return;
+    }
+    pick = chip.dataset.pick;
+    input.value = pick;
+    for (const node of chipsEl.querySelectorAll(".chip")) {
+      node.setAttribute("aria-pressed", String(node === chip));
+    }
+  });
+
+  saveBtn.addEventListener("click", () => {
+    const value = input.value.trim();
+    if (!value) {
+      input.focus();
+      return;
+    }
+    if (sheetMode === "replace") {
+      commitAction("replace", value);
+    } else {
+      selectedLabel = null;
+      commitAction("add", value);
+    }
+  });
+
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      saveBtn.click();
+    }
+  });
+
+  cancelBtn.addEventListener("click", closeSheet);
+  scrim.addEventListener("click", closeSheet);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && sheetOpen) {
+      closeSheet();
+    }
+  });
+
+  toastUndo.addEventListener("click", () => {
+    const fn = undoFn;
+    undoFn = null;
+    hideToast(true);
+    fn?.();
+  });
+
+  syncHint();
+  setInterval(() => {
+    if (order.length) {
+      renderList();
+    }
+  }, 1000);
+
+  onLiveDetectionLogCleared(resetLabels);
+
+  return {
+    noteLiveLabels,
+    setLiveAnnotateState,
+    setSuggestions,
+    resetLabels,
+    getLabelCount: () => order.length,
+  };
+}

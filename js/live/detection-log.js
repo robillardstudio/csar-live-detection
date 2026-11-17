@@ -6,7 +6,9 @@ const recordings = [];
 let activeRecording = null;
 const exportedIds = new Set();
 let sessionStart = null;
+let nextRowId = 1;
 const clearListeners = new Set();
+const changeListeners = new Set();
 
 export function getLiveDetectionSessionStart() {
   return sessionStart;
@@ -74,15 +76,160 @@ export function onLiveDetectionLogCleared(listener) {
   clearListeners.add(listener);
 }
 
+// Fires after co-annotation rows are appended so Review can refresh without clearing.
+export function onLiveDetectionLogChanged(listener) {
+  changeListeners.add(listener);
+}
+
+function notifyLogChanged() {
+  for (const listener of changeListeners) {
+    listener();
+  }
+}
+
 export function clearLiveDetectionLog() {
   log.length = 0;
   recordings.length = 0;
   activeRecording = null;
   exportedIds.clear();
   sessionStart = null;
+  nextRowId = 1;
   for (const listener of clearListeners) {
     listener();
   }
+}
+
+function bumpRecordingRowCount(recordingId) {
+  const recording =
+    activeRecording?.recording_id === recordingId
+      ? activeRecording
+      : recordings.find((item) => item.recording_id === recordingId);
+  if (recording) {
+    recording.row_count += 1;
+    exportedIds.delete(recording.recording_id);
+  }
+}
+
+function appendUserRow(row) {
+  log.push(row);
+  if (row.recording_id != null) {
+    bumpRecordingRowCount(row.recording_id);
+  }
+  notifyLogChanged();
+  return row;
+}
+
+// Live co-annotation at the current GPS/time. Never edits or deletes AI rows.
+export function logUserAction({
+  action,
+  label = "",
+  refersToLabel = null,
+  refersToRow = null,
+  timestamp = Date.now(),
+  gpsFix = null,
+  orientation = null,
+  modelId = null,
+  backend = null,
+}) {
+  if (action !== "add" && action !== "replace" && action !== "delete") {
+    return null;
+  }
+  const trimmed = String(label ?? "").trim();
+  if (action !== "delete" && !trimmed) {
+    return null;
+  }
+
+  sessionStart ??= timestamp;
+  return appendUserRow({
+    id: nextRowId++,
+    timestamp,
+    recording_id: activeRecording?.recording_id ?? null,
+    lat: gpsFix?.lat ?? null,
+    lon: gpsFix?.lon ?? null,
+    gps_accuracy: gpsFix?.accuracy ?? null,
+    gps_timestamp: gpsFix?.timestamp ?? null,
+    heading: orientation?.heading ?? null,
+    camera_heading: orientation?.cameraHeading ?? null,
+    object_bearing: null,
+    distance_m: null,
+    distance_method: null,
+    est_lat: null,
+    est_lon: null,
+    heading_accuracy: orientation?.accuracy ?? null,
+    device_beta: orientation?.beta ?? null,
+    device_gamma: orientation?.gamma ?? null,
+    screen_angle: orientation?.screenAngle ?? null,
+    screen_orientation_type: orientation?.screenOrientationType ?? null,
+    model: modelId,
+    dtype: backend?.dtype ?? null,
+    device: backend?.device ?? null,
+    label: action === "delete" ? "" : trimmed,
+    confidence: null,
+    rank: null,
+    bbox: null,
+    bbox_norm: null,
+    frame_w: null,
+    frame_h: null,
+    inference_ms: null,
+    source: "user",
+    action,
+    refers_to_label: refersToLabel,
+    refers_to_row: refersToRow,
+  });
+}
+
+// Review-map replace: same lat/lon/time as the AI row. Never edits that row.
+export function logLabelReplace(originalRow, newLabel) {
+  const label = String(newLabel ?? "").trim();
+  if (!originalRow || !label || originalRow.source === "user") {
+    return null;
+  }
+
+  sessionStart ??= originalRow.timestamp;
+  return appendUserRow({
+    ...originalRow,
+    id: nextRowId++,
+    source: "user",
+    action: "replace",
+    label,
+    refers_to_label: originalRow.label,
+    refers_to_row: originalRow.id,
+  });
+}
+
+// Undo for a live delete toast: removes a user action row only.
+export function removeUserLogRow(rowId) {
+  const index = log.findIndex(
+    (row) => row.id === rowId && row.source === "user",
+  );
+  if (index < 0) {
+    return false;
+  }
+  const [removed] = log.splice(index, 1);
+  if (removed.recording_id != null) {
+    const recording = recordings.find(
+      (item) => item.recording_id === removed.recording_id,
+    );
+    if (recording && recording.row_count > 0) {
+      recording.row_count -= 1;
+    }
+  }
+  notifyLogChanged();
+  return true;
+}
+
+export function findLatestAiRowForLabel(label) {
+  const needle = String(label ?? "").trim();
+  if (!needle) {
+    return null;
+  }
+  for (let i = log.length - 1; i >= 0; i -= 1) {
+    const row = log[i];
+    if (row.source !== "user" && row.label === needle) {
+      return row;
+    }
+  }
+  return null;
 }
 
 // Pixel bbox matches the inference frame; bbox_norm (0–1) is resolution-independent for the later AR/3D stage.
@@ -113,9 +260,13 @@ export function logDetectionFrame({
       exportedIds.delete(activeRecording.recording_id);
     }
   }
+  const logged = [];
   for (const detection of detections) {
     const hasBox = detection.box != null;
+    const id = nextRowId;
+    nextRowId += 1;
     log.push({
+      id,
       timestamp,
       recording_id: activeRecording?.recording_id ?? null,
       lat: gpsFix?.lat ?? null,
@@ -154,8 +305,13 @@ export function logDetectionFrame({
       frame_w: frameW,
       frame_h: frameH,
       inference_ms: inferenceMs,
+      source: "ai",
+      action: null,
+      refers_to_label: null,
+      refers_to_row: null,
     });
+    logged.push({ id, label: detection.label });
   }
 
-  return log.length;
+  return logged;
 }

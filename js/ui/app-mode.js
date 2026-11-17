@@ -2,6 +2,7 @@
 import {
   getLiveDetectionLog,
   getRecordings,
+  onLiveDetectionLogChanged,
   onLiveDetectionLogCleared,
   recordingDurationMs,
 } from "../live/detection-log.js";
@@ -113,7 +114,7 @@ export function initAppMode(views) {
     showTab(activeTab);
   }
 
-  function fillPicker() {
+  function fillPicker(preferredValue) {
     const options = [new Option("All recordings", "all")];
     for (const recording of snapshot.recordings) {
       options.push(
@@ -124,10 +125,14 @@ export function initAppMode(views) {
       );
     }
     picker.replaceChildren(...options);
-    picker.value = String(snapshot.recordings.at(-1).recording_id);
+    const fallback = String(snapshot.recordings.at(-1).recording_id);
+    const preferred = preferredValue ?? fallback;
+    picker.value = [...picker.options].some((option) => option.value === preferred)
+      ? preferred
+      : fallback;
   }
 
-  function renderReview() {
+  function renderReview(preferredValue) {
     closeViews();
     snapshot = {
       takenAt: Date.now(),
@@ -142,7 +147,7 @@ export function initAppMode(views) {
       picker.replaceChildren();
       return;
     }
-    fillPicker();
+    fillPicker(preferredValue);
     showSelection();
   }
 
@@ -201,6 +206,12 @@ export function initAppMode(views) {
   onLiveDetectionLogCleared(() => {
     if (mode === "review") {
       renderReview();
+    }
+  });
+
+  onLiveDetectionLogChanged(() => {
+    if (mode === "review") {
+      renderReview(picker.value);
     }
   });
 }

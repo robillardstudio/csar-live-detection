@@ -9,138 +9,219 @@
 <body>
   <header class="top-nav">
     <div class="top-nav__start">
-      <h1 class="top-nav__title">Live detection tool</h1>
+      <h1 class="top-nav__title">
+        <span class="desktop-only">Live detection tool</span>
+        <span class="mobile-only">Detection</span>
+      </h1>
       <div class="segmented" role="group" aria-label="Mode">
         <button type="button" class="segmented__option" data-app-mode="live" aria-pressed="true">Live</button>
         <button type="button" class="segmented__option" data-app-mode="review" aria-pressed="false">Review</button>
       </div>
     </div>
     <nav class="top-nav__actions" aria-label="Controls">
-      <button type="button" id="btn-live-toggle" class="btn btn--primary" aria-pressed="false" data-show-in="live">Start Live Detection</button>
-      <button type="button" id="btn-record" class="btn btn--secondary" aria-pressed="false" data-show-in="live">Start Recording</button>
-      <div class="export-menu hidden" data-show-in="review">
-        <button type="button" id="btn-export" class="btn btn--secondary export-menu__trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="export-menu">Export</button>
-        <div id="export-menu" class="export-menu__list" role="menu" hidden>
-          <button type="button" class="export-menu__item" role="menuitem" data-export="csv">CSV</button>
-          <button type="button" class="export-menu__item" role="menuitem" data-export="json">JSON</button>
-        </div>
-      </div>
+      <button type="button" id="btn-record" class="btn btn--outline desktop-only" aria-pressed="false" data-show-in="live"><span class="recdot" aria-hidden="true"></span>Start Recording</button>
+      <button type="button" id="btn-live-toggle" class="btn btn--primary desktop-only" aria-pressed="false" data-show-in="live">Start Live Detection</button>
       <button type="button" id="btn-clear-recordings" class="btn btn--quiet hidden" data-show-in="review" disabled>Clear recordings</button>
     </nav>
   </header>
 
   <div class="app-layout">
-    <aside id="sidebar" class="sidebar" aria-label="Live detection status">
-      <div class="sidebar__sheet-header">
-        <h2 class="sidebar__sheet-title">Details</h2>
-        <button type="button" id="btn-details-close" class="btn btn--secondary">Close</button>
-      </div>
+    <aside id="sidebar" class="sidebar inspector desktop-only" aria-label="Live detection status">
       <div class="live-sidebar-stack">
-        <section class="live-card">
-          <h2 class="live-card__label">Model</h2>
-          <select id="model-picker" class="model-picker" aria-label="Model" data-model-picker></select>
+        <section class="sec">
+          <div class="sec-h"><span class="eyebrow">Model</span></div>
+          <select id="model-picker" class="model-picker select" aria-label="Model" data-model-picker></select>
         </section>
 
-        <section class="live-card">
-          <h2 class="live-card__label">Backend</h2>
-          <p class="live-card__backend" data-metric="backend">—</p>
+        <section class="sec">
+          <div class="sec-h"><span class="eyebrow">Still detection</span></div>
+          <label class="still-settings__check">
+            <input type="checkbox" id="skip-when-still" checked>
+            Skip when still
+          </label>
+          <label class="still-settings__slider" for="still-sensitivity">
+            <span>Sensitivity</span>
+            <input type="range" id="still-sensitivity" min="0" max="2" step="1" value="1">
+            <span id="still-sensitivity-label">Medium</span>
+          </label>
         </section>
 
-        <section class="live-card">
-          <h2 class="live-card__label">Performance</h2>
+        <section class="sec">
+          <div class="sec-h">
+            <span class="eyebrow">Backend</span>
+            <span class="tag" data-metric="backend">—</span>
+          </div>
+        </section>
+
+        <section class="sec">
+          <div class="sec-h"><span class="eyebrow">Performance</span></div>
           <dl class="live-card__rows">
-            <div class="live-card__row">
+            <div class="live-card__row kv">
               <dt>Inference</dt>
-              <dd data-metric="instant">—</dd>
+              <dd class="mono" data-metric="instant">—</dd>
             </div>
-            <div class="live-card__row">
+            <div class="live-card__row kv">
               <dt>Avg (30)</dt>
-              <dd data-metric="avg">—</dd>
+              <dd class="mono" data-metric="avg">—</dd>
             </div>
-            <div class="live-card__row">
+            <div class="live-card__row kv">
               <dt>Effective FPS</dt>
-              <dd data-metric="fps">—</dd>
+              <dd class="mono" data-metric="fps">—</dd>
             </div>
-            <div class="live-card__row">
+            <div class="live-card__row kv">
               <dt>Frames</dt>
-              <dd data-metric="frames">0</dd>
+              <dd class="mono" data-metric="frames">0</dd>
             </div>
           </dl>
+          <p class="still-indicator still-indicator--sidebar hidden" data-still-sidebar hidden>Still · paused</p>
         </section>
 
-        <section class="live-card">
-          <h2 class="live-card__label">GPS</h2>
-          <p class="live-card__gps" data-metric="gps">—</p>
+        <section class="sec">
+          <div class="sec-h">
+            <span class="eyebrow">GPS</span>
+            <b class="mono gps-accuracy-inline" data-metric="gps-accuracy">—</b>
+          </div>
+          <p class="live-card__gps coords" data-metric="gps">—</p>
         </section>
 
-        <section class="live-card">
-          <h2 class="live-card__label">Heading</h2>
-          <p class="live-card__heading" data-metric="heading">—</p>
-          <p class="live-card__heading-detail" data-metric="heading-detail"></p>
+        <section class="sec">
+          <div class="sec-h"><span class="eyebrow">Heading</span></div>
+          <p class="live-card__heading big mono" data-metric="heading">—</p>
+          <p class="live-card__heading-detail coords muted" data-metric="heading-detail"></p>
         </section>
 
-        <section class="live-card live-card--logged">
-          <h2 class="live-card__label">Logged</h2>
-          <p class="live-card__logged-value" data-metric="logged">0</p>
+        <section class="sec">
+          <div class="sec-h"><span class="eyebrow">Logged</span></div>
+          <p class="live-card__logged-value big mono" data-metric="logged">0</p>
         </section>
       </div>
     </aside>
-    <div id="details-backdrop" class="details-backdrop" hidden></div>
 
     <main id="main-content" class="main-content">
-      <div id="live-stage" class="live-stage">
-        <div id="live-feed" class="live-stage__feed" hidden>
-          <div class="live-stage__media">
-            <video id="live-video" class="live-stage__video" autoplay playsinline muted></video>
-            <ol id="class-readout" class="class-readout" hidden></ol>
-          </div>
-        </div>
-        <div id="live-idle" class="live-stage__idle">
-          <p class="live-stage__idle-title">Start live detection</p>
-          <p class="live-stage__idle-copy">Camera feed and object boxes will appear here.</p>
-          <div class="live-stage__idle-picker">
-            <label class="live-card__label" for="model-picker-start">Model</label>
-            <select id="model-picker-start" class="model-picker" data-model-picker></select>
-          </div>
-          <button type="button" id="btn-live-start-main" class="btn btn--primary">Start live detection</button>
-        </div>
-        <div id="model-loading" class="live-stage__loading" hidden>
-          <p class="live-stage__loading-label">Loading…</p>
-        </div>
-      </div>
+      <div id="live-panel" class="live-panel" data-show-in="live">
+        <!-- Mobile Direction B scroll stack -->
+        <div class="live-scroll mobile-only">
+          <section id="session-card" class="card setup" aria-label="Session">
+            <div id="session-idle" class="session-idle">
+              <label class="field" for="model-picker-mobile">
+                <span class="eyebrow">Model</span>
+                <select id="model-picker-mobile" class="select" aria-label="Model" data-model-picker></select>
+              </label>
+              <div class="switchrow">
+                <div>
+                  Record session
+                  <small id="rec-sub">Saves video alongside labels</small>
+                </div>
+                <button type="button" id="btn-record-mobile" class="switch" role="switch" aria-checked="false" aria-label="Record session"></button>
+              </div>
+              <button type="button" id="btn-live-start-mobile" class="btn btn-primary" aria-pressed="false">Start detection</button>
+            </div>
+            <div id="session-live" class="session-live" hidden>
+              <div class="running">
+                <div>
+                  <b id="session-model-name">—</b>
+                  <span id="session-run-status" class="mono session-run-status">Running · 0:00</span>
+                </div>
+                <button type="button" id="btn-change-model" class="change">Change</button>
+              </div>
+              <div class="switchrow session-live-record">
+                <div>
+                  Record session
+                  <small class="rec-sub-live">Start or stop any time</small>
+                </div>
+                <button type="button" id="btn-record-live" class="switch" role="switch" aria-checked="false" aria-label="Record session"></button>
+              </div>
+              <button type="button" id="btn-live-stop" class="btn btn-stop">Stop detection</button>
+            </div>
+          </section>
 
-      <section class="status-strip" aria-label="Live status">
-        <dl class="status-strip__items">
-          <div class="status-strip__item">
-            <dt>Logged</dt>
-            <dd data-metric="logged">0</dd>
+          <section class="card mobile-metrics-card" aria-label="Live status">
+            <div class="metrics">
+              <div class="metric">
+                <div class="eyebrow">Logged</div>
+                <div class="v mono" data-metric="logged">0</div>
+              </div>
+              <div class="metric">
+                <div class="eyebrow">GPS</div>
+                <div class="v mono"><span class="dot gps-dot" data-gps-dot></span><span data-metric="gps-accuracy">—</span></div>
+              </div>
+              <div class="metric">
+                <div class="eyebrow">Heading</div>
+                <div class="v" data-heading-metric>
+                  <span data-metric="heading">—</span>
+                </div>
+              </div>
+              <div class="metric">
+                <div class="eyebrow">FPS</div>
+                <div class="v mono muted" data-fps-metric data-metric="fps">–</div>
+              </div>
+            </div>
+            <button type="button" id="btn-details" class="metrics-foot" aria-expanded="false" aria-controls="details-sheet">
+              <span>Backend, latency, coordinates</span>
+              <b>Details <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></b>
+            </button>
+          </section>
+
+          <div id="ai-labels-phone-host" class="labels-host"></div>
+        </div>
+
+        <!-- Shared camera + desktop labels: desktop always; mobile stage only while live -->
+        <div class="live-grid">
+          <div id="live-stage" class="live-stage">
+            <div id="live-feed" class="live-stage__feed" hidden>
+              <div class="live-stage__media">
+                <video id="live-video" class="live-stage__video" autoplay playsinline muted></video>
+                <ol id="class-readout" class="class-readout" hidden></ol>
+              </div>
+            </div>
+            <div id="live-idle" class="live-stage__idle desktop-only">
+              <button type="button" id="btn-live-start-main" class="btn btn--primary">Start live detection</button>
+              <p class="live-stage__idle-copy">Camera feed and object boxes will appear here.</p>
+            </div>
+            <div id="model-loading" class="live-stage__loading" hidden>
+              <p class="live-stage__loading-label cam__loading-label">Loading…</p>
+            </div>
+            <span class="chip-dark livebadge mobile-only" style="top:12px;left:12px" hidden data-live-badge><span class="dot"></span>Live</span>
+            <span id="rec-badge" class="chip-dark recbadge mobile-only" style="top:12px;right:12px" hidden>
+              <span class="dot"></span><span class="mono" id="rec-badge-time">REC 0:00</span>
+            </span>
           </div>
-          <div class="status-strip__item">
-            <dt>GPS</dt>
-            <dd data-metric="gps-accuracy">—</dd>
-          </div>
-          <div class="status-strip__item">
-            <dt>Heading</dt>
-            <dd data-metric="heading">—</dd>
-          </div>
-          <div class="status-strip__item">
-            <dt>FPS</dt>
-            <dd data-metric="fps">—</dd>
-          </div>
-        </dl>
-        <button type="button" id="btn-details" class="btn btn--secondary" aria-expanded="false" aria-controls="sidebar">Details</button>
-      </section>
+          <div id="ai-labels-desktop-host" class="labels-rail desktop-only" data-show-in="live"></div>
+        </div>
+
+        <p id="still-indicator" class="still-indicator hidden" hidden>Still · paused</p>
+
+        <button type="button" id="btn-add-label" class="fab mobile-only" data-show-in="live">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          Add label
+        </button>
+      </div>
 
       <section id="review-panel" class="review-panel hidden" aria-label="Review">
         <p id="review-empty" class="review-panel__empty hidden">No recordings yet — switch to Live and press Start Recording.</p>
         <div id="review-body" class="review-panel__body hidden">
-          <select id="review-recording" class="model-picker review-picker" aria-label="Recording"></select>
-          <div id="review-tabs" class="segmented review-tabs" role="tablist" aria-label="Review views">
-            <button type="button" id="tab-map" class="segmented__option" role="tab" data-review-tab="map" aria-selected="true" aria-controls="session-map">Map</button>
-            <button type="button" id="tab-summary" class="segmented__option" role="tab" data-review-tab="summary" aria-selected="false" aria-controls="session-summary" tabindex="-1">Summary</button>
+          <div class="review-toolbar review-bar">
+            <span class="eyebrow desktop-only">Review</span>
+            <select id="review-recording" class="model-picker review-picker select" aria-label="Recording"></select>
+            <div class="spacer desktop-only" aria-hidden="true"></div>
+            <div id="review-tabs" class="segmented review-tabs" role="tablist" aria-label="Review views">
+              <button type="button" id="tab-summary" class="segmented__option" role="tab" data-review-tab="summary" aria-selected="false" aria-controls="session-summary" tabindex="-1">Summary</button>
+              <button type="button" id="tab-map" class="segmented__option" role="tab" data-review-tab="map" aria-selected="true" aria-controls="session-map">Map</button>
+            </div>
+            <div class="export-menu hidden" data-show-in="review">
+              <button type="button" id="btn-export" class="btn btn--outline export-menu__trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="export-menu">Export</button>
+              <div id="export-menu" class="export-menu__list" role="menu" hidden>
+                <button type="button" class="export-menu__item" role="menuitem" data-export="csv">CSV</button>
+                <button type="button" class="export-menu__item" role="menuitem" data-export="json">JSON</button>
+              </div>
+            </div>
           </div>
 
           <section id="session-map" class="session-map" role="tabpanel" aria-labelledby="tab-map">
+            <div id="map-label-view" class="segmented map-label-view" role="group" aria-label="Label view">
+              <button type="button" class="segmented__option" data-label-view="recorded" aria-pressed="false">As recorded</button>
+              <button type="button" class="segmented__option" data-label-view="changes" aria-pressed="true">With changes</button>
+            </div>
             <p id="map-empty" class="session-map__empty hidden">No location data in this selection.</p>
             <p id="map-error" class="session-map__empty hidden">The map could not be loaded.</p>
             <p id="map-objects-empty" class="session-map__note hidden">No object positions were estimated in this session. Estimates need GPS, a compass reading within ±30°, and a label with a known size that isn't cut off by the frame edge.</p>
@@ -169,11 +250,24 @@
                   <h2 class="live-card__label">Duration</h2>
                   <p class="summary-metric__value" data-summary="duration">00:00</p>
                 </section>
+                <section class="live-card summary-metric">
+                  <h2 class="live-card__label">Adds</h2>
+                  <p class="summary-metric__value" data-summary="adds">0</p>
+                </section>
+                <section class="live-card summary-metric">
+                  <h2 class="live-card__label">Replaces</h2>
+                  <p class="summary-metric__value" data-summary="replaces">0</p>
+                </section>
+                <section class="live-card summary-metric">
+                  <h2 class="live-card__label">Deletes</h2>
+                  <p class="summary-metric__value" data-summary="deletes">0</p>
+                </section>
               </div>
 
               <section class="live-card">
                 <h2 class="live-card__label">Summary</h2>
                 <p id="summary-text" class="summary-text"></p>
+                <ul id="summary-changes" class="summary-changes hidden"></ul>
               </section>
 
               <section id="summary-recordings" class="live-card hidden">
@@ -206,6 +300,100 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <!-- Mobile-only sheets -->
+  <div id="details-backdrop" class="scrim mobile-only" hidden></div>
+  <div id="details-sheet" class="sheet mobile-only" role="dialog" aria-modal="true" aria-labelledby="details-sheet-title" hidden>
+    <div class="grab" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <div>
+        <h2 id="details-sheet-title">Session details</h2>
+        <small id="details-sheet-sub">Last session</small>
+      </div>
+      <button type="button" id="btn-details-close" class="x" aria-label="Close">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="sheet-body">
+      <div class="eyebrow group-label">Model</div>
+      <div class="group">
+        <div class="kv"><span>Model</span><b id="details-model-name">—</b></div>
+        <div class="kv"><span>Backend</span><b class="mono" data-metric="backend">—</b></div>
+      </div>
+
+      <div class="eyebrow group-label">Performance</div>
+      <div class="group">
+        <div class="kv"><span>Effective FPS</span><b class="mono" data-metric="fps-detail">–</b></div>
+        <div class="kv"><span>Inference</span><b class="mono" data-metric="instant">—</b></div>
+        <div class="kv"><span>Average (last 30)</span><b class="mono" data-metric="avg">—</b></div>
+        <div class="perfbar" title="Inference vs. other frame time" hidden data-perf-bar>
+          <i data-perf-inference></i><i data-perf-rest></i>
+        </div>
+        <p class="perf-note" data-perf-note hidden></p>
+        <div class="kv"><span>Frames processed</span><b class="mono" data-metric="frames">0</b></div>
+        <div class="kv still-settings-block">
+          <label class="still-settings__check">
+            <input type="checkbox" id="skip-when-still-mobile" checked data-still-skip>
+            Skip when still
+          </label>
+        </div>
+        <div class="kv">
+          <label class="still-settings__slider" for="still-sensitivity-mobile">
+            <span>Sensitivity</span>
+            <input type="range" id="still-sensitivity-mobile" min="0" max="2" step="1" value="1" data-still-slider>
+            <span id="still-sensitivity-label-mobile" data-still-label>Medium</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="eyebrow group-label">Location</div>
+      <div class="group">
+        <div class="kv">
+          <span class="coords" data-metric="gps">—</span>
+          <button type="button" class="copy" id="btn-copy-coords" hidden>Copy</button>
+        </div>
+        <div class="kv"><span>Accuracy</span><b class="mono" data-metric="gps-accuracy-detail">—</b></div>
+      </div>
+
+      <div class="eyebrow group-label">Heading</div>
+      <div id="details-heading-ok" class="group" hidden>
+        <div class="kv"><span>Camera heading</span><b class="mono" data-metric="heading-main">—</b></div>
+        <div class="kv"><span>Detail</span><b class="mono" data-metric="heading-detail"></b></div>
+      </div>
+      <div id="details-heading-warn" class="warnrow">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M4 4l16 16"/></svg>
+        <div>
+          <b>Compass unavailable</b>
+          <small>This device doesn't report a heading, so labels are saved without direction.</small>
+        </div>
+      </div>
+
+      <div class="eyebrow group-label">Session</div>
+      <div class="group">
+        <div class="kv"><span>Detections logged</span><b class="mono" data-metric="logged">0</b></div>
+        <div class="kv"><span>Labels</span><b class="mono" data-metric="label-count">0</b></div>
+        <div class="kv"><span>Recording</span><b data-metric="recording-state">Off</b></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="models-backdrop" class="scrim mobile-only" hidden></div>
+  <div id="models-sheet" class="sheet mobile-only" role="dialog" aria-modal="true" aria-labelledby="models-sheet-title" hidden>
+    <div class="grab" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <div>
+        <h2 id="models-sheet-title">Switch model</h2>
+        <small>Detection keeps running</small>
+      </div>
+      <button type="button" id="btn-models-close" class="x" aria-label="Close">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="sheet-body">
+      <div id="models-list" class="group" role="radiogroup" aria-label="Model"></div>
+      <p class="sheet-note">The camera and any recording keep going while the new model loads. Your labels aren't affected.</p>
+    </div>
   </div>
 
   <script type="module" src="js/main.js"></script>

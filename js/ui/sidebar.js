@@ -1,19 +1,76 @@
-// Live-loop defaults (confidence / max objects). No settings UI yet; getSettings() is the seam for one later.
+// Live-loop settings (confidence / max objects / still skip) + model pickers.
 import { MODEL_OPTIONS, getModelId } from "../models.js";
 
-const DEFAULT_PARAMETERS = {
-  confidence: 0.5,
+const SENSITIVITY_LEVELS = ["low", "medium", "high"];
+
+const settings = {
+  confidence: 0.2,
   maxObjects: 10,
+  skipWhenStill: true,
+  stillSensitivity: "medium",
 };
 
 export function getSettings() {
   return {
     analysisSettings: {},
-    parameters: { ...DEFAULT_PARAMETERS },
+    parameters: { ...settings },
   };
 }
 
-// The sidebar and the start screen each have a picker; both show the same model.
+export function initStillSettings() {
+  const skips = [
+    document.getElementById("skip-when-still"),
+    document.getElementById("skip-when-still-mobile"),
+  ].filter(Boolean);
+  const sliders = [
+    document.getElementById("still-sensitivity"),
+    document.getElementById("still-sensitivity-mobile"),
+  ].filter(Boolean);
+  const labels = [
+    document.getElementById("still-sensitivity-label"),
+    document.getElementById("still-sensitivity-label-mobile"),
+  ].filter(Boolean);
+
+  if (!skips.length || !sliders.length) {
+    return;
+  }
+
+  function syncSensitivityLabel() {
+    const level = SENSITIVITY_LEVELS[Number(sliders[0].value)] ?? "medium";
+    settings.stillSensitivity = level;
+    const text = level.charAt(0).toUpperCase() + level.slice(1);
+    for (const label of labels) {
+      label.textContent = text;
+    }
+  }
+
+  function syncSkip(checked) {
+    settings.skipWhenStill = checked;
+    for (const skip of skips) {
+      skip.checked = checked;
+    }
+  }
+
+  function syncSlider(value) {
+    for (const slider of sliders) {
+      slider.value = value;
+    }
+    syncSensitivityLabel();
+  }
+
+  const index = SENSITIVITY_LEVELS.indexOf(settings.stillSensitivity);
+  syncSkip(settings.skipWhenStill);
+  syncSlider(String(index < 0 ? 1 : index));
+
+  for (const skip of skips) {
+    skip.addEventListener("change", () => syncSkip(skip.checked));
+  }
+  for (const slider of sliders) {
+    slider.addEventListener("input", () => syncSlider(slider.value));
+  }
+}
+
+// Sidebar, start screen, and mobile session card share the same model pickers.
 function getModelPickers() {
   return [...document.querySelectorAll("[data-model-picker]")];
 }

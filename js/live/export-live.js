@@ -42,6 +42,10 @@ const CSV_HEADERS = [
   "frame_w",
   "frame_h",
   "inference_ms",
+  "source",
+  "action",
+  "refers_to_label",
+  "refers_to_row",
 ];
 
 function formatTimestampStamp(date = new Date()) {
@@ -87,7 +91,9 @@ function rowToCsvLine(row) {
     row.dtype,
     row.device,
     quoteCsvLabel(row.label),
-    Number(row.confidence).toFixed(3),
+    row.confidence == null || Number.isNaN(Number(row.confidence))
+      ? ""
+      : Number(row.confidence).toFixed(3),
     row.rank ?? "",
     row.bbox?.xmin ?? "",
     row.bbox?.ymin ?? "",
@@ -100,6 +106,10 @@ function rowToCsvLine(row) {
     row.frame_w,
     row.frame_h,
     row.inference_ms,
+    row.source ?? "",
+    row.action ?? "",
+    row.refers_to_label ? quoteCsvLabel(row.refers_to_label) : "",
+    row.refers_to_row ?? "",
   ].join(",");
 }
 

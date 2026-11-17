@@ -2,13 +2,15 @@
 import { loadModel } from "./models.js";
 import { isCoarsePointer } from "./utils/device.js";
 import { initLiveDetectionPage } from "./ui/live-detection.js";
+import { initLiveAnnotate } from "./ui/live-annotate.js";
 import { initSessionSummary } from "./ui/session-summary.js";
 import { initSessionMap } from "./ui/session-map.js";
 import { initAppMode } from "./ui/app-mode.js";
 import { initDetailsSheet } from "./ui/details-sheet.js";
 
 document.addEventListener("DOMContentLoaded", () => {
-  initLiveDetectionPage();
+  const annotate = initLiveAnnotate();
+  initLiveDetectionPage(annotate);
   initDetailsSheet();
   const map = initSessionMap();
   const summary = initSessionSummary();

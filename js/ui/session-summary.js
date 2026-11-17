@@ -56,12 +56,33 @@ function summarizeDetectionLog(rows) {
   const models = [];
   const seenModels = new Set();
   const labelCounts = new Map();
+  const actionItems = [];
+  const actionCounts = { add: 0, replace: 0, delete: 0 };
   let confidenceSum = 0;
   let confidenceCount = 0;
   let firstTimestamp = null;
   let lastTimestamp = null;
+  let detections = 0;
 
   for (const row of rows) {
+    if (row.source === "user") {
+      const action = row.action;
+      if (action === "add" || action === "replace" || action === "delete") {
+        actionCounts[action] += 1;
+        if (action === "add") {
+          actionItems.push(`+ ${row.label || "label"}`);
+        } else if (action === "replace") {
+          actionItems.push(
+            `${row.refers_to_label ?? "?"} → ${row.label ?? "?"}`,
+          );
+        } else {
+          actionItems.push(`− ${row.refers_to_label ?? "label"}`);
+        }
+      }
+      continue;
+    }
+
+    detections += 1;
     const timestamp = Number(row.timestamp);
     if (Number.isFinite(timestamp)) {
       timestamps.add(timestamp);
@@ -94,7 +115,7 @@ function summarizeDetectionLog(rows) {
     .slice(0, TOP_LABELS);
 
   return {
-    detections: rows.length,
+    detections,
     frames: timestamps.size,
     averageConfidence:
       confidenceCount > 0 ? confidenceSum / confidenceCount : 0,
@@ -105,15 +126,29 @@ function summarizeDetectionLog(rows) {
     models,
     topLabels,
     mostFrequent: topLabels[0]?.label ?? "none",
+    actionCounts,
+    changes: actionItems,
   };
 }
 
 function summaryParagraph(stats, subject) {
+  const { add, replace, delete: del } = stats.actionCounts;
+  const parts = [];
+  if (add) {
+    parts.push(countLabel(add, "add", "adds"));
+  }
+  if (replace) {
+    parts.push(countLabel(replace, "replace", "replaces"));
+  }
+  if (del) {
+    parts.push(countLabel(del, "delete", "deletes"));
+  }
+  const actionNote = parts.length ? ` Annotations: ${parts.join(", ")}.` : "";
   return (
     `${subject} logged ${countLabel(stats.detections, "detection", "detections")} ` +
     `across ${countLabel(stats.frames, "frame", "frames")} over ${formatDuration(stats.durationMs)}, ` +
     `using ${joinList(stats.models)}. The most frequent label was ${stats.mostFrequent}; ` +
-    `average confidence was ${stats.averageConfidence.toFixed(2)}.`
+    `average confidence was ${stats.averageConfidence.toFixed(2)}.${actionNote}`
   );
 }
 
@@ -213,15 +248,34 @@ function setSummaryValue(name, value) {
   }
 }
 
+function renderChangesList(changes) {
+  const list = document.getElementById("summary-changes");
+  if (!list) {
+    return;
+  }
+  list.replaceChildren(
+    ...changes.map((text) => {
+      const li = document.createElement("li");
+      li.textContent = text;
+      return li;
+    }),
+  );
+  list.classList.toggle("hidden", changes.length === 0);
+}
+
 function renderSummary(stats, subject) {
   setSummaryValue("detections", String(stats.detections));
   setSummaryValue("frames", String(stats.frames));
   setSummaryValue("confidence", stats.averageConfidence.toFixed(2));
   setSummaryValue("duration", formatDuration(stats.durationMs));
+  setSummaryValue("adds", String(stats.actionCounts.add));
+  setSummaryValue("replaces", String(stats.actionCounts.replace));
+  setSummaryValue("deletes", String(stats.actionCounts.delete));
   const paragraph = document.getElementById("summary-text");
   if (paragraph) {
     paragraph.textContent = summaryParagraph(stats, subject);
   }
+  renderChangesList(stats.changes);
 }
 
 function renderRecordingsTable(section, body, selection) {
@@ -277,6 +331,10 @@ export function initSessionSummary() {
     content.classList.toggle("hidden", !hasRows);
     if (!hasRows) {
       destroyChart();
+      renderChangesList([]);
+      setSummaryValue("adds", "0");
+      setSummaryValue("replaces", "0");
+      setSummaryValue("deletes", "0");
       return;
     }
 

@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Detection Direction B</title>
+<style>
+:root{
+  --bg:#ececea; --surface:#fff; --surface-2:#f6f6f4; --line:#e6e6e2; --line-2:#d8d8d3;
+  --text:#18181a; --text-2:#5d5d63; --text-3:#94949a;
+  --ink:#18181a; --live:#16a34a; --rec:#e5484d; --rec-bg:#fff0f0; --rec-line:#f6c5c7;
+  --warn:#b45309; --warn-bg:#fdf3e1; --sel:#eef2ff; --sel-line:#c7d2fe; --accent:#3b5bdb;
+  --cam:#0f1012; --cam-2:#1b1c20;
+  --ease-out:cubic-bezier(.23,1,.32,1); --ease-drawer:cubic-bezier(.32,.72,0,1);
+  --r:14px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:15px/1.4 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;padding:28px 16px 60px}
+button,select,input{font:inherit;color:inherit}
+button{cursor:pointer;border:0;background:none;-webkit-tap-highlight-color:transparent;transition:transform 140ms var(--ease-out),background-color 150ms ease,opacity 150ms ease}
+button:active{transform:scale(.97)}
+.mono{font-variant-numeric:tabular-nums}
+.muted{color:var(--text-3)}
+
+/* page */
+.wrap{max-width:900px;margin:0 auto;display:grid;grid-template-columns:375px 1fr;gap:40px;align-items:start}
+.notes h1{font-size:22px;letter-spacing:-.01em;margin-bottom:6px}
+.notes>p{color:var(--text-2);margin-bottom:18px}
+.ctrl{display:inline-flex;gap:6px;background:#dcdcd8;padding:3px;border-radius:10px;margin-bottom:22px}
+.ctrl button{padding:6px 14px;border-radius:8px;font-size:13px;font-weight:500;color:var(--text-2)}
+.ctrl button[aria-pressed=true]{background:#fff;color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.notes ol{padding-left:20px;display:grid;gap:12px;color:var(--text-2)}
+.notes ol b{color:var(--text)}
+@media (max-width:820px){.wrap{grid-template-columns:1fr;justify-items:center}.notes{max-width:375px;order:-1}}
+
+/* phone */
+.phone{position:relative;width:100%;max-width:375px;height:780px;background:var(--surface-2);border-radius:34px;overflow:hidden;box-shadow:0 0 0 1px rgba(0,0,0,.06),0 20px 40px -18px rgba(0,0,0,.25)}
+.scroll{position:absolute;inset:0;overflow-y:auto;overscroll-behavior:contain;padding-bottom:110px}
+.top{display:flex;align-items:center;justify-content:space-between;padding:18px 16px 12px}
+.top h3{font-size:17px;font-weight:600;letter-spacing:-.01em}
+.seg{display:flex;background:#e8e8e5;border-radius:9px;padding:2px}
+.seg span{font-size:13px;font-weight:500;padding:5px 12px;border-radius:7px;color:var(--text-2)}
+.seg span.on{background:#fff;color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.eyebrow{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3)}
+.card{background:var(--surface);border-radius:var(--r);box-shadow:0 0 0 1px var(--line);margin:0 16px 12px}
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;height:48px;width:100%;padding:0 18px;border-radius:12px;font-weight:600}
+.btn-primary{background:var(--ink);color:#fff}
+.btn-stop{background:#fff;color:var(--rec);box-shadow:inset 0 0 0 1px var(--line-2)}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.link{font-size:13px;font-weight:600;padding:4px 0}
+
+/* camera */
+.cam{position:relative;margin:0 16px 12px;border-radius:var(--r);height:230px;background:radial-gradient(120% 90% at 50% 40%,var(--cam-2),var(--cam));overflow:hidden}
+.chip-dark{position:absolute;display:inline-flex;align-items:center;gap:6px;background:rgba(0,0,0,.5);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);color:#fff;font-size:12px;font-weight:600;padding:6px 10px;border-radius:999px}
+.livebadge .dot{background:var(--live);animation:pulse 1.6s infinite}
+.recbadge .dot{background:var(--rec)}
+@keyframes pulse{70%{box-shadow:0 0 0 6px rgba(22,163,74,0)}0%{box-shadow:0 0 0 0 rgba(22,163,74,.6)}}
+.bbox{position:absolute;left:24%;top:24%;width:42%;height:58%;border:2px solid #4ade80;border-radius:6px}
+.bbox b{position:absolute;top:-24px;left:-2px;background:#4ade80;color:#052e12;font-size:11px;padding:3px 7px;border-radius:5px 5px 5px 0;white-space:nowrap}
+
+/* setup card */
+.setup{padding:16px}
+.field{display:flex;flex-direction:column;gap:6px;margin-bottom:12px}
+.select{appearance:none;height:44px;border-radius:10px;border:0;box-shadow:inset 0 0 0 1px var(--line-2);background:var(--surface-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none' stroke='%235d5d63' stroke-width='1.8'%3E%3Cpath d='M3 4.5l3 3 3-3'/%3E%3C/svg%3E") no-repeat right 14px center;padding:0 36px 0 12px;font-weight:500}
+.switchrow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0 14px;border-top:1px solid var(--line)}
+.switchrow small{display:block;color:var(--text-3);font-size:12px}
+.switchrow.on small{color:var(--rec)}
+.switch{width:44px;height:26px;border-radius:99px;background:#d6d6d2;position:relative;flex:none;transition:background-color 180ms ease}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);transition:transform 200ms var(--ease-out)}
+.switch[aria-checked=true]{background:var(--rec)}
+.switch[aria-checked=true]::after{transform:translateX(18px)}
+.switch:active{transform:none}
+.running{display:flex;justify-content:space-between;align-items:center;padding-bottom:12px}
+.change{height:34px;padding:0 14px;border-radius:9px;font-size:13px;font-weight:600;background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--line-2)}
+.change:disabled{opacity:.45;transform:none}
+.spin{display:inline-block;width:11px;height:11px;border-radius:50%;border:2px solid var(--line-2);border-top-color:var(--text-2);margin-right:6px;vertical-align:-1px;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.cam .loading{position:absolute;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.35);color:#fff;font-size:13px;font-weight:600}
+.cam .loading .spin{border-color:rgba(255,255,255,.3);border-top-color:#fff}
+.mopt{display:flex;width:100%;align-items:center;justify-content:space-between;gap:12px;padding:13px 14px;border-top:1px solid var(--line);text-align:left}
+.mopt:first-child{border-top:0}
+.mopt:active{transform:none;background:var(--surface-2)}
+.mopt small{display:block;color:var(--text-3);font-size:12px}
+.mopt .check{width:20px;height:20px;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--line-2);flex:none;display:grid;place-items:center}
+.mopt[aria-checked=true] .check{background:var(--ink);box-shadow:none;color:#fff}
+.sheet-note{font-size:12px;color:var(--text-3);padding:10px 4px 0}
+.running b{font-size:16px}
+.running span{font-size:13px;color:var(--text-3)}
+
+/* metrics */
+.metrics{display:grid;grid-template-columns:repeat(4,1fr)}
+.metric{padding:12px 10px 12px 14px;border-left:1px solid var(--line)}
+.metric:first-child{border-left:0}
+.metric .v{font-weight:600;font-size:15px;margin-top:3px;display:flex;align-items:center;gap:5px}
+.metric .v.warn{color:var(--warn);font-size:13px}
+.metrics-foot{display:flex;width:100%;justify-content:space-between;align-items:center;border-top:1px solid var(--line);padding:11px 14px;font-size:13px;color:var(--text-2);text-align:left}
+.metrics-foot:active{transform:none;background:var(--surface-2)}
+.metrics-foot b{color:var(--text);display:flex;align-items:center;gap:2px}
+
+/* labels */
+.list-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 8px}
+.list-head h4{font-size:15px;font-weight:600}
+.hint{font-size:13px;color:var(--text-3);padding:0 16px 10px}
+.row{padding:11px 16px;border-top:1px solid var(--line);cursor:pointer;transition:background-color 150ms ease}
+.row .r1{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.row .name{font-weight:600}
+.row .meta{font-size:13px;color:var(--text-3)}
+.count{font-size:12px;font-weight:600;background:var(--surface-2);color:var(--text-2);border-radius:999px;padding:2px 8px;box-shadow:inset 0 0 0 1px var(--line);transition:transform 200ms var(--ease-out)}
+.count.bump{transform:scale(1.2)}
+.row.sel{background:var(--sel)}
+.row.sel .count{background:#fff;box-shadow:inset 0 0 0 1px var(--sel-line)}
+.actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px;animation:in 180ms var(--ease-out)}
+.actions .a{height:38px;border-radius:10px;background:#fff;box-shadow:inset 0 0 0 1px var(--sel-line);font-size:13px;font-weight:600;padding:0 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.actions .a:disabled{opacity:.45;cursor:not-allowed;transform:none}
+.actions .a{display:flex;align-items:center;justify-content:center;gap:6px}
+.actions .del{color:var(--rec)}
+.actions-note{font-size:12px;color:var(--text-3);margin-top:8px}
+@keyframes in{from{opacity:0;transform:translateY(-4px)}}
+
+/* FAB */
+.fab{position:absolute;right:16px;bottom:24px;z-index:4;height:52px;padding:0 20px 0 16px;border-radius:999px;background:var(--ink);color:#fff;font-weight:600;display:flex;align-items:center;gap:8px;box-shadow:0 8px 24px -6px rgba(0,0,0,.35),0 2px 6px rgba(0,0,0,.15);transition:transform 200ms var(--ease-out),opacity 200ms var(--ease-out)}
+.fab.hidden{opacity:0;transform:translateY(8px) scale(.95);pointer-events:none}
+.fab:active{transform:scale(.96)}
+
+/* sheets */
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.32);opacity:0;pointer-events:none;transition:opacity 260ms ease;z-index:5}
+.scrim.on{opacity:1;pointer-events:auto}
+.sheet{position:absolute;left:0;right:0;bottom:0;max-height:88%;background:var(--surface-2);border-radius:22px 22px 0 0;z-index:6;transform:translateY(100%);transition:transform 340ms var(--ease-drawer);display:flex;flex-direction:column;box-shadow:0 -10px 30px rgba(0,0,0,.18)}
+.sheet.open{transform:translateY(0)}
+.sheet .grab{width:36px;height:5px;border-radius:9px;background:#cfcfcb;margin:8px auto 0;flex:none}
+.sheet-head{display:flex;align-items:center;justify-content:space-between;padding:10px 16px 12px;flex:none}
+.sheet-head h4{font-size:17px;font-weight:600}
+.sheet-head small{display:block;font-size:13px;color:var(--text-3);font-weight:400}
+.x{width:32px;height:32px;border-radius:50%;background:#e6e6e2;display:grid;place-items:center;color:var(--text-2)}
+.sheet-body{overflow-y:auto;padding:0 16px 24px}
+
+/* details */
+.group-label{padding:14px 4px 6px}
+.group{background:var(--surface);border-radius:12px;box-shadow:0 0 0 1px var(--line)}
+.kv{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:11px 14px;border-top:1px solid var(--line);font-size:14px}
+.kv:first-child{border-top:0}
+.kv span:first-child{color:var(--text-2)}
+.kv b{font-weight:600}
+.tag{font-size:11px;font-weight:600;padding:2px 7px;border-radius:6px;background:var(--sel);color:var(--accent);margin-left:6px}
+.coords{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text)}
+.copy{font-size:12px;font-weight:600;color:var(--accent);padding:4px 0}
+.warnrow{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;color:var(--warn);background:var(--warn-bg);border-radius:12px;font-size:14px}
+.warnrow small{display:block;color:#8a5a1f;font-size:12px;margin-top:2px}
+.perfbar{height:6px;border-radius:9px;background:var(--surface-2);overflow:hidden;margin:0 14px 12px;display:flex}
+.perfbar i{display:block;height:100%}
+
+/* add sheet */
+.input{width:100%;height:48px;border-radius:12px;border:0;box-shadow:inset 0 0 0 1px var(--line-2);background:#fff;padding:0 14px;font-size:16px;outline:none;transition:box-shadow 150ms ease}
+.input:focus{box-shadow:inset 0 0 0 2px var(--ink)}
+.frame{display:flex;gap:12px;align-items:center;background:#fff;border-radius:12px;box-shadow:0 0 0 1px var(--line);padding:10px;margin-bottom:14px}
+.thumb{width:56px;height:56px;border-radius:8px;background:radial-gradient(120% 90% at 50% 40%,var(--cam-2),var(--cam));position:relative;flex:none}
+.thumb::after{content:"";position:absolute;left:24%;top:20%;width:46%;height:60%;border:1.5px solid #4ade80;border-radius:3px}
+.thumb.nof{background:var(--surface-2);box-shadow:inset 0 0 0 1.5px var(--line-2)}
+.thumb.nof::after{border:0;left:50%;top:50%;width:22px;height:2px;background:var(--line-2);transform:translate(-50%,-50%) rotate(-45deg)}
+.frame small{display:block;color:var(--text-3);font-size:12px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 18px}
+.chip{height:34px;padding:0 12px;border-radius:999px;background:#fff;box-shadow:inset 0 0 0 1px var(--line-2);font-size:13px;font-weight:500;display:flex;align-items:center;gap:6px}
+.chip em{font-style:normal;color:var(--text-3);font-size:12px}
+.chip[aria-pressed=true]{box-shadow:inset 0 0 0 1.5px var(--ink)}
+
+/* toast */
+.toast{position:absolute;left:16px;right:16px;bottom:24px;z-index:7;background:var(--ink);color:#fff;border-radius:12px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;font-size:14px;opacity:0;transform:translateY(12px);transition:opacity 200ms var(--ease-out),transform 200ms var(--ease-out);pointer-events:none}
+.toast.on{opacity:1;transform:none;pointer-events:auto}
+.toast button{color:#9db4ff;font-weight:600;font-size:14px}
+
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition-property:opacity,background-color!important}}
+@media (max-width:420px){.phone{height:740px;border-radius:24px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="phone" id="phone"></div>
+
+  <aside class="notes">
+    <h1>Direction B, refined</h1>
+    <p>Try it on the left. Switch between idle and live, toggle recording mid-session, open Details, and tap a label.</p>
+    <div class="ctrl" role="group" aria-label="Session state">
+      <button data-state="idle" aria-pressed="true">Idle</button>
+      <button data-state="live" aria-pressed="false">Live</button>
+    </div>
+    <ol>
+      <li><b>Recording works mid-session.</b> The record switch stays in the session card while live. Turning it on shows a red timer there and a REC badge on the camera, so recording can start at any point.</li>
+      <li><b>Details is a session readout.</b> Grouped like a settings screen: Model, Performance, Location, Heading, Session. Values are right-aligned with fixed-width numbers, the coordinates have a Copy button, and the missing compass is a single warning instead of giant monospace text.</li>
+      <li><b>Add label is a floating button.</b> It's always there. While live, the sheet attaches the current frame and offers the model's top guesses as one-tap chips. While idle, it saves the label with location only and offers recent labels instead.</li>
+      <li><b>Tapping a label shows its actions.</b> Add to, Replace and Delete open inside the row. Replace reuses the same sheet. Delete is undoable from a toast instead of a confirm dialog.</li>
+    </ol>
+  </aside>
+</div>
+
+<script>
+const S = { live:false, rec:false, recStart:0, model:'MobileNet', sel:null, sheet:null, replaceIdx:null, pick:null, toast:null };
+let labels = [
+  {name:'military uniform', n:4, ago:'10 min ago'},
+  {name:'trench coat', n:7, ago:'11 min ago'},
+  {name:'backpack', n:2, ago:'14 min ago'},
+  {name:'umbrella', n:1, ago:'15 min ago'},
+];
+const guesses = [['trench coat',.82],['overcoat',.09],['military uniform',.04]];
+const models = ['MobileNet','COCO-SSD','YOLOv8n'];
+const modelInfo = {MobileNet:'Classification · names the whole frame','COCO-SSD':'Detection · draws a box per object',YOLOv8n:'Detection · faster boxes, smaller model'};
+const I = {
+  trash:`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>`,
+  nocomp:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M4 4l16 16"/></svg>`,
+  plus:`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`,
+  x:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>`,
+  chev:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>`,
+};
+const total = () => labels.reduce((a,l)=>a+l.n,0);
+const fmt = s => `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+const recTime = () => S.rec ? fmt(Math.floor((Date.now()-S.recStart)/1000)) : '';
+
+function sessionCard(){
+  const recRow = `<div class="switchrow ${S.rec?'on':''}"><div>Record session<small id="recsub">${S.rec?`Recording · ${recTime()}`:(S.live?'Start or stop any time':'Saves video alongside labels')}</small></div>
+    <button class="switch" role="switch" aria-checked="${S.rec}" data-act="rec" aria-label="Record session"></button></div>`;
+  if(S.live) return `<div class="card setup">
+      <div class="running">
+        <div><b>${S.model}</b><span class="mono" style="display:block">${S.switching?'<span class="spin"></span>Loading model…':'Running · 0:42'}</span></div>
+        <button class="change" data-act="models" ${S.switching?'disabled':''}>Change</button>
+      </div>
+      ${recRow}
+      <button class="btn btn-stop" data-act="toggle">Stop detection</button></div>`;
+  return `<div class="card setup">
+      <label class="field"><span class="eyebrow">Model</span><select class="select" data-act="model" aria-label="Model">${models.map(m=>`<option ${m===S.model?'selected':''}>${m}</option>`).join('')}</select></label>
+      ${recRow}
+      <button class="btn btn-primary" data-act="toggle">Start detection</button></div>`;
+}
+
+function labelRows(){
+  return labels.map((l,i)=>{
+    const sel = S.sel===i;
+    return `<div class="row ${sel?'sel':''}" data-act="sel" data-i="${i}" role="button" tabindex="0" aria-expanded="${sel}">
+      <div class="r1"><span class="name">${l.name}</span><span class="count mono" data-count="${i}">${l.n}</span></div>
+      <div class="meta">Last seen ${l.ago}</div>
+      ${sel?`<div class="actions">
+        <button class="a" data-act="addto" ${S.live?'':'disabled'} aria-label="Add current frame to ${l.name}">Add to</button>
+        <button class="a" data-act="replace" ${S.live?'':'disabled'} aria-label="Replace ${l.name}">Replace</button>
+        <button class="a del" data-act="del" aria-label="Delete ${l.name}">Delete</button>
+      </div>${S.live?'':`<p class="actions-note">Add to and Replace use the live frame. Start detection to use them.</p>`}`:''}
+    </div>`;
+  }).join('');
+}
+
+function detailsSheet(){
+  const inf=22, avg=41;
+  return `<div class="grab"></div>
+  <div class="sheet-head"><div><h4>Session details</h4><small>${S.live?'Updating live':'Last session'}</small></div><button class="x" data-act="close" aria-label="Close">${I.x}</button></div>
+  <div class="sheet-body">
+    <div class="eyebrow group-label">Model</div>
+    <div class="group">
+      <div class="kv"><span>Model</span><b>${S.model}</b></div>
+      <div class="kv"><span>Backend</span><b>webgpu<span class="tag">fp16</span></b></div>
+    </div>
+    <div class="eyebrow group-label">Performance</div>
+    <div class="group">
+      <div class="kv"><span>Effective FPS</span><b class="mono">${S.live?'24.5':'–'}</b></div>
+      <div class="kv"><span>Inference</span><b class="mono">${inf} ms</b></div>
+      <div class="kv"><span>Average (last 30)</span><b class="mono">${avg} ms</b></div>
+      <div class="perfbar" title="Inference vs. other frame time"><i style="width:${inf/avg*100}%;background:var(--accent)"></i><i style="flex:1;background:#c9d3f5"></i></div>
+      <p style="font-size:12px;color:var(--text-3);margin:-4px 14px 12px">Inference is ${Math.round(inf/avg*100)}% of each frame. The rest is capture and drawing.</p>
+      <div class="kv"><span>Frames processed</span><b class="mono">3</b></div>
+    </div>
+    <div class="eyebrow group-label">Location</div>
+    <div class="group">
+      <div class="kv"><span class="coords">40.00234, −83.00541</span><button class="copy" data-act="copy">Copy</button></div>
+      <div class="kv"><span>Accuracy</span><b class="mono"><span class="dot" style="background:var(--live);margin-right:6px"></span>±40 m</b></div>
+    </div>
+    <div class="eyebrow group-label">Heading</div>
+    <div class="warnrow">${I.nocomp}<div><b>Compass unavailable</b><small>This device doesn't report a heading, so labels are saved without direction.</small></div></div>
+    <div class="eyebrow group-label">Session</div>
+    <div class="group">
+      <div class="kv"><span>Detections logged</span><b class="mono">${total()}</b></div>
+      <div class="kv"><span>Labels</span><b class="mono">${labels.length}</b></div>
+      <div class="kv"><span>Recording</span><b style="color:${S.rec?'var(--rec)':'inherit'}">${S.rec?'On · '+recTime():'Off'}</b></div>
+    </div>
+  </div>`;
+}
+
+function modelsSheet(){
+  return `<div class="grab"></div>
+  <div class="sheet-head"><div><h4>Switch model</h4><small>Detection keeps running</small></div><button class="x" data-act="close" aria-label="Close">${I.x}</button></div>
+  <div class="sheet-body">
+    <div class="group" role="radiogroup" aria-label="Model">${models.map(m=>`<button class="mopt" role="radio" aria-checked="${m===S.model}" data-act="pickmodel" data-v="${m}"><div><b>${m}</b><small>${modelInfo[m]}</small></div><span class="check">${m===S.model?'<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>':''}</span></button>`).join('')}</div>
+    <p class="sheet-note">The camera and any recording keep going while the new model loads. Your labels aren't affected.</p>
+  </div>`;
+}
+
+function addSheet(){
+  const rep = S.replaceIdx!=null ? labels[S.replaceIdx] : null;
+  return `<div class="grab"></div>
+  <div class="sheet-head"><div><h4>${rep?'Replace label':'New label'}</h4><small>${rep?`Replacing “${rep.name}”`:(S.live?'Tag what’s in the current frame':'Log something you’ve seen')}</small></div><button class="x" data-act="close" aria-label="Close">${I.x}</button></div>
+  <div class="sheet-body">
+    ${S.live
+      ? `<div class="frame"><div class="thumb"></div><div><b>Current frame</b><small class="mono">40.00234, −83.00541 · just now</small></div></div>`
+      : `<div class="frame"><div class="thumb nof"></div><div><b>No frame attached</b><small>Saved with your location only. Start detection to attach a frame.</small></div></div>`}
+    <span class="eyebrow">${S.live?'Model suggestions':'Recent labels'}</span>
+    <div class="chips">${(S.live?guesses:labels.slice(0,4).map(l=>[l.name,null])).map(([g,p])=>`<button class="chip" data-act="pick" data-v="${g}" aria-pressed="${S.pick===g}">${g}${p==null?'':`<em class="mono">${Math.round(p*100)}%</em>`}</button>`).join('')}</div>    <label class="field"><span class="eyebrow">Or type a label</span><input class="input" id="lbl" placeholder="e.g. trench coat" value="${S.pick??''}" autocomplete="off"></label>
+    <button class="btn btn-primary" data-act="save">${rep?'Replace label':'Save label'}</button>
+  </div>`;
+}
+
+function render(){
+  const ph = document.getElementById('phone');
+  const st = ph.querySelector('.scroll')?.scrollTop||0;
+  ph.innerHTML = `
+  <div class="scroll">
+    <div class="top"><h3>Detection</h3><div class="seg"><span class="on">Live</span><span>Review</span></div></div>
+    ${S.live?`<div class="cam">${S.switching?`<div class="loading"><span><span class="spin"></span>Loading ${S.model}…</span></div>`:`<div class="bbox"><b>trench coat · 0.82</b></div>`}
+      <span class="chip-dark livebadge" style="top:12px;left:12px"><span class="dot"></span>Live</span>
+      ${S.rec?`<span class="chip-dark recbadge" style="top:12px;right:12px"><span class="dot"></span><span class="mono" id="recbadge">REC ${recTime()}</span></span>`:''}
+    </div>`:''}
+    ${sessionCard()}
+    <div class="card">
+      <div class="metrics">
+        <div class="metric"><div class="eyebrow">Logged</div><div class="v mono">${total()}</div></div>
+        <div class="metric"><div class="eyebrow">GPS</div><div class="v mono"><span class="dot" style="background:var(--live)"></span>±40m</div></div>
+        <div class="metric"><div class="eyebrow">Heading</div><div class="v warn">${I.nocomp} None</div></div>
+        <div class="metric"><div class="eyebrow">FPS</div><div class="v mono ${S.live?'':'muted'}">${S.live?'24.5':'–'}</div></div>
+      </div>
+      <button class="metrics-foot" data-act="details"><span>Backend, latency, coordinates</span><b>Details ${I.chev}</b></button>
+    </div>
+    <div class="card">
+      <div class="list-head"><h4>Labels <span class="muted" style="font-weight:500">· ${labels.length}</span></h4><button class="link" style="color:var(--text-2)">View all</button></div>
+      ${S.live?'':`<p class="hint">Detection is off, so labels you add now are saved without a frame.</p>`}
+      ${labelRows()}
+    </div>
+  </div>
+  <button class="fab ${!S.sheet?'':'hidden'}" data-act="add">${I.plus}Add label</button>
+  <div class="scrim ${S.sheet?'on':''}" data-act="close"></div>
+  <div class="sheet" id="sheet">${S.sheet==='details'?detailsSheet():S.sheet==='add'?addSheet():S.sheet==='models'?modelsSheet():''}</div>
+  <div class="toast" id="toast"><span id="toastmsg"></span><button data-act="undo" id="undo">Undo</button></div>`;
+  ph.querySelector('.scroll').scrollTop = st;
+  if(S.sheet) requestAnimationFrame(()=>requestAnimationFrame(()=>ph.querySelector('#sheet').classList.add('open')));
+}
+
+// open/close sheets without re-rendering the page so the slide animates
+function openSheet(kind){ S.sheet=kind; render(); }
+function closeSheet(){
+  const sh=document.getElementById('sheet'); sh.classList.remove('open');
+  document.querySelector('.scrim').classList.remove('on');
+  S.sheet=null; S.replaceIdx=null; S.pick=null;
+  document.querySelector('.fab').classList.remove('hidden');
+}
+
+let toastTimer, undoFn;
+function toast(msg, undo){
+  render();
+  const t=document.getElementById('toast');
+  document.getElementById('toastmsg').textContent=msg;
+  document.getElementById('undo').style.display = undo?'':'none';
+  undoFn=undo;
+  document.querySelector('.fab').classList.add('hidden');
+  requestAnimationFrame(()=>t.classList.add('on'));
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>{t.classList.remove('on'); document.querySelector('.fab').classList.toggle('hidden', !!S.sheet);},3200);
+}
+
+function setLive(v){
+  S.live=v; if(!v){ S.rec=false; }
+  document.querySelectorAll('.ctrl button').forEach(b=>b.setAttribute('aria-pressed',String((b.dataset.state==='live')===v)));
+  render();
+}
+
+document.querySelector('.ctrl').addEventListener('click',e=>{const b=e.target.closest('button'); if(b) setLive(b.dataset.state==='live');});
+
+const ph=document.getElementById('phone');
+ph.addEventListener('click',e=>{
+  const t=e.target.closest('[data-act]'); if(!t) return;
+  const a=t.dataset.act;
+  switch(a){
+    case 'toggle': return setLive(!S.live);
+    case 'rec': S.rec=!S.rec; S.recStart=Date.now(); return render();
+    case 'details': return openSheet('details');
+    case 'models': return openSheet('models');
+    case 'pickmodel': {
+      const m=t.dataset.v; if(m===S.model) return closeSheet();
+      S.model=m; S.switching=true; S.sheet=null; render();
+      setTimeout(()=>{ S.switching=false; toast(`Switched to ${m}`); }, 1400);
+      return;
+    }
+    case 'add': S.replaceIdx=null; return openSheet('add');
+    case 'close': return closeSheet();
+    case 'sel': { const i=+t.dataset.i; S.sel = S.sel===i?null:i; return render(); }
+    case 'addto': { const i=S.sel; labels[i].n++; labels[i].ago='just now'; render();
+      const c=ph.querySelector(`[data-count="${i}"]`); c.classList.add('bump'); setTimeout(()=>c.classList.remove('bump'),200);
+      return toast(`Added frame to ${labels[i].name}`); }
+    case 'replace': S.replaceIdx=S.sel; return openSheet('add');
+    case 'del': { const i=S.sel, removed=labels[i]; labels.splice(i,1); S.sel=null;
+      return toast(`Deleted “${removed.name}”`, ()=>{ labels.splice(i,0,removed); render(); }); }
+    case 'undo': { const f=undoFn; undoFn=null; document.getElementById('toast').classList.remove('on'); f&&f(); return; }
+    case 'pick': { S.pick=t.dataset.v; ph.querySelectorAll('.chip').forEach(c=>c.setAttribute('aria-pressed',String(c===t))); document.getElementById('lbl').value=S.pick; return; }
+    case 'copy': t.textContent='Copied'; setTimeout(()=>t.textContent='Copy',1200); return;
+    case 'save': {
+      const v=document.getElementById('lbl').value.trim(); if(!v){document.getElementById('lbl').focus();return;}
+      if(S.replaceIdx!=null){ const old=labels[S.replaceIdx].name; labels[S.replaceIdx].name=v; labels[S.replaceIdx].ago='just now'; S.sel=S.replaceIdx; S.sheet=null; S.replaceIdx=null; S.pick=null; return toast(`Replaced “${old}” with “${v}”`); }
+      const ex=labels.findIndex(l=>l.name.toLowerCase()===v.toLowerCase());
+      if(ex>=0){labels[ex].n++;labels[ex].ago='just now';} else labels.unshift({name:v,n:1,ago:'just now'});
+      S.sheet=null; S.pick=null; return toast(`Saved “${v}”`);
+    }
+  }
+});
+ph.addEventListener('change',e=>{ if(e.target.dataset.act==='model'){S.model=e.target.value;} });
+ph.addEventListener('keydown',e=>{
+  if((e.key==='Enter'||e.key===' ')&&e.target.matches('.row')){e.preventDefault();e.target.click();}
+  if(e.key==='Enter'&&e.target.id==='lbl'){ph.querySelector('[data-act=save]').click();}
+  if(e.key==='Escape'&&S.sheet) closeSheet();
+});
+// live recording timer without re-rendering
+setInterval(()=>{ if(!S.rec) return;
+  const sub=document.getElementById('recsub'); if(sub) sub.textContent=`Recording · ${recTime()}`;
+  const b=document.getElementById('recbadge'); if(b) b.textContent=`REC ${recTime()}`;
+},1000);
+render();
+</script>
+</body>
+</html>
