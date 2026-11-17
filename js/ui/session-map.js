@@ -1,4 +1,9 @@
 // On-demand map of the walked GPS path and detections from the in-memory detection log. Read-only.
+import {
+  getLabelSuppressionAt,
+  isAiRow,
+  isUserAnnotationRow,
+} from "../live/detection-log.js";
 import { formatClockTime } from "../utils/time.js";
 
 const LEAFLET_CSS =
@@ -21,7 +26,10 @@ const OVERLAYS = [
   ["objects", "Where objects were"],
   ["sightLines", "Sight lines"],
   ["labels", 'Labels <span class="map-layers__hint">(zoom in)</span>'],
+  ["userAnnotations", "User annotations"],
 ];
+const AI_MARKER_COLOR = "#16a34a";
+const USER_MARKER_COLOR = "#ea580c";
 // All label colors avoid the path blue and the start green / end red.
 const FIXED_LABEL_COLORS = new Map([
   ["person", "#f59e0b"],
@@ -65,7 +73,12 @@ const FAN_MIN_RADIUS_PX = 16;
 const FAN_SPACING_PX = 13;
 
 // Kept for the page visit across tabs, recordings and mode switches; no storage.
-const layerState = { base: "street", overlays: new Set(["path", "viewer"]) };
+const layerState = {
+  base: "street",
+  overlays: new Set(["path", "viewer", "userAnnotations"]),
+  // "raw" = machine labels as recorded; "coannotated" = after delete/replace.
+  labelView: "coannotated",
+};
 
 let map = null;
 let layers = null;
@@ -270,14 +283,25 @@ function objectPosition(row) {
   };
 }
 
-function extractDetectionPoints(rows, positionOf) {
+function extractDetectionPoints(rows, positionOf, { labelView = "raw" } = {}) {
   const points = new Map();
   const labelCounts = new Map();
+  const coannotated = labelView === "coannotated";
 
   for (const row of rows) {
+    if (!isAiRow(row)) {
+      continue;
+    }
     const position = positionOf(row);
     const label = typeof row.label === "string" ? row.label.trim() : "";
     if (!position || !label) {
+      continue;
+    }
+
+    const suppression = coannotated
+      ? getLabelSuppressionAt(label, position.lat, position.lon, rows)
+      : null;
+    if (suppression?.action === "replace") {
       continue;
     }
 
@@ -294,6 +318,9 @@ function extractDetectionPoints(rows, positionOf) {
         existing.confidence = confidence;
         Object.assign(existing, extras);
       }
+      if (suppression?.action === "delete") {
+        existing.deleted = true;
+      }
       continue;
     }
     points.set(key, {
@@ -303,6 +330,7 @@ function extractDetectionPoints(rows, positionOf) {
       label,
       confidence: Number.isFinite(confidence) ? confidence : null,
       count: 1,
+      deleted: suppression?.action === "delete",
     });
   }
 
@@ -320,6 +348,49 @@ function extractDetectionPoints(rows, positionOf) {
   return { dots, labels, colors };
 }
 
+function extractUserAnnotations(rows, { labelView = "raw" } = {}) {
+  const points = [];
+  for (const row of rows) {
+    if (!isUserAnnotationRow(row)) {
+      continue;
+    }
+    const action = row.action || "add";
+    if (action === "delete") {
+      continue;
+    }
+    // Replace markers only appear in the co-annotated machine-label view.
+    if (action === "replace" && labelView !== "coannotated") {
+      continue;
+    }
+    const position = readCoordinate(row.lat, row.lon);
+    if (!position) {
+      continue;
+    }
+    const text =
+      (typeof row.user_annotation === "string" && row.user_annotation.trim()) ||
+      (typeof row.label === "string" && row.label.trim()) ||
+      "";
+    if (!text) {
+      continue;
+    }
+    points.push({
+      lat: position[0],
+      lon: position[1],
+      text,
+      action,
+      about: row.refers_to_label || null,
+      nearby: Array.isArray(row.nearby_ai_labels)
+        ? row.nearby_ai_labels
+        : String(row.nearby_ai_labels ?? "")
+            .split(/[;,]/)
+            .map((item) => item.trim())
+            .filter(Boolean),
+      timestamp: Number(row.timestamp),
+    });
+  }
+  return points;
+}
+
 function themeColor(name, fallback) {
   const value = getComputedStyle(document.documentElement)
     .getPropertyValue(name)
@@ -333,6 +404,34 @@ function destroyMap() {
   map?.remove();
   map = null;
   layers = null;
+}
+
+function userAnnotationPopup(point) {
+  const content = document.createElement("div");
+  const title = document.createElement("p");
+  title.className = "map-popup__title";
+  title.textContent = point.text;
+  content.appendChild(title);
+
+  if (point.action === "replace" && point.about) {
+    const about = document.createElement("p");
+    about.className = "map-popup__note";
+    about.textContent = `Replaced: ${point.about}`;
+    content.appendChild(about);
+  } else if (point.about) {
+    const about = document.createElement("p");
+    about.className = "map-popup__note";
+    about.textContent = `About: ${point.about}`;
+    content.appendChild(about);
+  }
+
+  if (point.nearby?.length) {
+    const nearby = document.createElement("p");
+    nearby.className = "map-popup__note";
+    nearby.textContent = `Nearby AI: ${point.nearby.join(", ")}`;
+    content.appendChild(nearby);
+  }
+  return content;
 }
 
 function detectionPopup(dot, stackSize, kind) {
@@ -398,15 +497,18 @@ function drawDots(L, detections, kind, panel) {
         radius: 5,
         color: panel,
         weight: 1,
-        fillColor: detections.colors.get(dot.label),
-        fillOpacity: 0.9,
+        fillColor: AI_MARKER_COLOR,
+        fillOpacity: dot.deleted ? 0.35 : 0.9,
+        opacity: dot.deleted ? 0.5 : 1,
       })
         .bindPopup(detectionPopup(dot, group.length, kind))
         .bindTooltip(document.createTextNode(dot.label), {
           permanent: true,
           direction: "right",
           offset: [6, 0],
-          className: "map-dot-label",
+          className: dot.deleted
+            ? "map-dot-label map-dot-label--deleted"
+            : "map-dot-label",
         })
         .addTo(layer);
       if (group.length > 1) {
@@ -415,6 +517,29 @@ function drawDots(L, detections, kind, panel) {
     });
   }
   return { layer, fanned };
+}
+
+function drawUserAnnotations(L, points, panel) {
+  const layer = L.layerGroup();
+  for (const point of points) {
+    L.circleMarker([point.lat, point.lon], {
+      pane: "mapDots",
+      radius: 8,
+      color: panel,
+      weight: 2,
+      fillColor: USER_MARKER_COLOR,
+      fillOpacity: 0.95,
+    })
+      .bindPopup(userAnnotationPopup(point))
+      .bindTooltip(document.createTextNode(point.text), {
+        permanent: true,
+        direction: "right",
+        offset: [8, 0],
+        className: "map-dot-label",
+      })
+      .addTo(layer);
+  }
+  return layer;
 }
 
 function placeFanned(fanned) {
@@ -430,7 +555,7 @@ function drawSightLines(L, detections) {
   for (const dot of detections.dots) {
     L.polyline([dot.viewer, [dot.lat, dot.lon]], {
       pane: "mapLines",
-      color: detections.colors.get(dot.label),
+      color: AI_MARKER_COLOR,
       weight: 1.5,
       opacity: 0.4,
       interactive: false,
@@ -586,7 +711,7 @@ function renderLegend(legend, recordings, detections) {
       detections.labels.slice(0, LEGEND_LIMIT).map((item) => {
         const swatch = document.createElement("span");
         swatch.className = "map-legend__swatch";
-        swatch.style.backgroundColor = detections.colors.get(item.label);
+        swatch.style.backgroundColor = AI_MARKER_COLOR;
         return { swatch, name: item.label, count: item.count };
       }),
     );
@@ -616,6 +741,11 @@ function drawMap(L, container, paths, snapshot, onChange) {
   const panel = themeColor("--color-bg-panel", "#ffffff");
   const viewer = drawDots(L, snapshot.viewer, "viewer", panel);
   const objects = drawDots(L, snapshot.objects, "objects", panel);
+  const userAnnotations = drawUserAnnotations(
+    L,
+    snapshot.userAnnotations,
+    panel,
+  );
   const path = drawPaths(L, paths, themeColor("--color-accent", "#2563eb"));
 
   const bases = {
@@ -632,6 +762,7 @@ function drawMap(L, container, paths, snapshot, onChange) {
     sightLines: drawSightLines(L, snapshot.objects),
     // Empty; only switches the label CSS class.
     labels: L.layerGroup(),
+    userAnnotations,
   };
 
   bases[layerState.base].addTo(map);
@@ -685,15 +816,21 @@ export function initSessionMap() {
   const canvas = document.getElementById("map-canvas");
   const legend = document.getElementById("map-legend");
   const objectsEmpty = document.getElementById("map-objects-empty");
+  const labelViewSelect = document.getElementById("map-label-view");
 
   if (!empty || !errorNote || !canvas || !legend || !objectsEmpty) {
     return null;
   }
 
   let snapshot = null;
+  let activeSelection = null;
   // Path points and object estimates, so turning a layer on never needs a refit.
   let fitPoints = [];
   let fitPending = false;
+
+  if (labelViewSelect) {
+    labelViewSelect.value = layerState.labelView;
+  }
 
   function syncLayers() {
     if (!map) {
@@ -732,6 +869,7 @@ export function initSessionMap() {
   function close() {
     openGeneration += 1;
     fitPending = false;
+    activeSelection = null;
     destroyMap();
     clearLegend();
     objectsEmpty.classList.add("hidden");
@@ -740,16 +878,20 @@ export function initSessionMap() {
 
   async function open(selection) {
     const generation = ++openGeneration;
+    activeSelection = selection;
     const rows = selection.rows;
+    const labelView = layerState.labelView;
     const paths = extractRecordingPaths(selection.recordings, rows);
     const path = paths.flatMap((item) => item.points);
     snapshot = {
-      viewer: extractDetectionPoints(rows, viewerPosition),
-      objects: extractDetectionPoints(rows, objectPosition),
+      viewer: extractDetectionPoints(rows, viewerPosition, { labelView }),
+      objects: extractDetectionPoints(rows, objectPosition, { labelView }),
+      userAnnotations: extractUserAnnotations(rows, { labelView }),
     };
     fitPoints = [
       ...path,
       ...snapshot.objects.dots.map((dot) => [dot.lat, dot.lon]),
+      ...snapshot.userAnnotations.map((point) => [point.lat, point.lon]),
     ];
     errorNote.classList.add("hidden");
     objectsEmpty.classList.add("hidden");
@@ -794,6 +936,14 @@ export function initSessionMap() {
       fit();
     }
   }
+
+  labelViewSelect?.addEventListener("change", () => {
+    layerState.labelView =
+      labelViewSelect.value === "raw" ? "raw" : "coannotated";
+    if (activeSelection) {
+      void open(activeSelection);
+    }
+  });
 
   return { open, close, resize };
 }

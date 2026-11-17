@@ -1,6 +1,8 @@
 // On-demand snapshot of the in-memory detection log. Does not record, detect, or export.
 import {
   getRecordingById,
+  isAiRow,
+  isUserAnnotationRow,
   onRecordingUpdated,
   patchRecordingAnnotation,
   recordingDurationMs,
@@ -74,6 +76,47 @@ function countLabel(count, singular, plural) {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+function summarizeUserAnnotations(rows) {
+  const items = rows.filter(isUserAnnotationRow);
+  let linked = 0;
+  let created = 0;
+  const list = items
+    .slice()
+    .sort((a, b) => Number(b.timestamp) - Number(a.timestamp))
+    .map((row) => {
+      const action = row.action || "add";
+      const about =
+        typeof row.refers_to_label === "string" && row.refers_to_label.trim()
+          ? row.refers_to_label.trim()
+          : null;
+      if (about || action === "delete" || action === "replace") {
+        linked += 1;
+      } else {
+        created += 1;
+      }
+      const nearby = Array.isArray(row.nearby_ai_labels)
+        ? row.nearby_ai_labels
+        : String(row.nearby_ai_labels ?? "")
+            .split(/[;,]/)
+            .map((item) => item.trim())
+            .filter(Boolean);
+      const text =
+        action === "delete"
+          ? `Deleted ${about || row.label || "label"}`
+          : action === "replace"
+            ? `${row.user_annotation || row.label || ""} (replaced ${about || "label"})`
+            : row.user_annotation || row.label || "";
+      return {
+        time: formatClockTime(row.timestamp),
+        text,
+        about,
+        nearby,
+        action,
+      };
+    });
+  return { total: items.length, linked, created, list };
+}
+
 function summarizeDetectionLog(rows) {
   const timestamps = new Set();
   const models = [];
@@ -81,10 +124,15 @@ function summarizeDetectionLog(rows) {
   const labelCounts = new Map();
   let confidenceSum = 0;
   let confidenceCount = 0;
+  let detectionCount = 0;
   let firstTimestamp = null;
   let lastTimestamp = null;
 
   for (const row of rows) {
+    if (!isAiRow(row)) {
+      continue;
+    }
+    detectionCount += 1;
     const timestamp = Number(row.timestamp);
     if (Number.isFinite(timestamp)) {
       timestamps.add(timestamp);
@@ -117,7 +165,7 @@ function summarizeDetectionLog(rows) {
     .slice(0, TOP_LABELS);
 
   return {
-    detections: rows.length,
+    detections: detectionCount,
     frames: timestamps.size,
     averageConfidence:
       confidenceCount > 0 ? confidenceSum / confidenceCount : 0,
@@ -630,6 +678,40 @@ function renderRecordingsTable(section, body, selection) {
   }
 }
 
+function renderUserAnnotations(section, countNode, listNode, rows) {
+  if (!section || !countNode || !listNode) {
+    return;
+  }
+  const summary = summarizeUserAnnotations(rows);
+  section.classList.toggle("hidden", summary.total === 0);
+  if (summary.total === 0) {
+    countNode.textContent = "";
+    listNode.replaceChildren();
+    return;
+  }
+  countNode.textContent = `${summary.total} total · ${summary.linked} linked · ${summary.created} new`;
+  listNode.replaceChildren(
+    ...summary.list.map((item) => {
+      const li = document.createElement("li");
+      li.className = "user-annotation-list__item";
+      const title = document.createElement("p");
+      title.textContent = `${item.time} · ${item.text}`;
+      const meta = document.createElement("p");
+      meta.className = "user-annotation-list__meta";
+      const parts = [];
+      if (item.about) {
+        parts.push(`About: ${item.about}`);
+      }
+      if (item.nearby.length) {
+        parts.push(`Nearby AI: ${item.nearby.join(", ")}`);
+      }
+      meta.textContent = parts.join(" · ") || "New label";
+      li.append(title, meta);
+      return li;
+    }),
+  );
+}
+
 // The Review panel decides when the summary is visible; this only builds, clears, and re-measures it.
 export function initSessionSummary() {
   const panel = document.getElementById("session-summary");
@@ -640,6 +722,9 @@ export function initSessionSummary() {
   const analysisBody = document.getElementById("summary-analysis-body");
   const recordingsSection = document.getElementById("summary-recordings");
   const recordingsBody = document.getElementById("summary-recordings-body");
+  const userSection = document.getElementById("summary-user-annotations");
+  const userCount = document.getElementById("summary-user-count");
+  const userList = document.getElementById("summary-user-list");
 
   if (!panel || !empty || !content || !recordingsSection || !recordingsBody) {
     return null;
@@ -697,6 +782,7 @@ export function initSessionSummary() {
     content.classList.toggle("hidden", !hasContent);
     if (!hasContent) {
       destroyChart();
+      renderUserAnnotations(userSection, userCount, userList, []);
       return;
     }
 
@@ -718,6 +804,7 @@ export function initSessionSummary() {
     renderSummary(stats, selection.all ? "These recordings" : "This recording");
     refreshAnalysisSummary();
     renderRecordingsTable(recordingsSection, recordingsBody, selection);
+    renderUserAnnotations(userSection, userCount, userList, rows);
     if (chartNote) {
       chartNote.textContent = "";
       chartNote.classList.add("hidden");

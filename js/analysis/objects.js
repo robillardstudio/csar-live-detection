@@ -47,7 +47,7 @@ function formatObjectScore(score) {
   return normalizeScore(score).toFixed(2);
 }
 
-function drawBoundingBoxes(container, results, dimensionSource) {
+function drawBoundingBoxes(container, results, dimensionSource, onLabelSelect) {
   const image = dimensionSource ?? container.querySelector("img");
   if (!image || !results?.length) {
     return;
@@ -80,7 +80,8 @@ function drawBoundingBoxes(container, results, dimensionSource) {
     boxEl.style.height = `${percentBox.height}%`;
     boxEl.style.borderColor = color;
 
-    const labelEl = document.createElement("span");
+    const labelEl = document.createElement("button");
+    labelEl.type = "button";
     labelEl.className = "bounding-box__label";
     // TEMPORARY field-test readout: bearing appended to the label.
     const bearing = Number.isFinite(result.bearing)
@@ -88,6 +89,10 @@ function drawBoundingBoxes(container, results, dimensionSource) {
       : "";
     labelEl.textContent = `${result.label} ${formatObjectScore(result.score)}${bearing}`;
     labelEl.style.backgroundColor = color;
+    labelEl.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onLabelSelect?.(result.label);
+    });
 
     boxEl.appendChild(labelEl);
     layer.appendChild(boxEl);
@@ -96,7 +101,12 @@ function drawBoundingBoxes(container, results, dimensionSource) {
   container.appendChild(layer);
 }
 
-export function renderBoundingBoxesOnContainer(container, results, dimensionSource) {
+export function renderBoundingBoxesOnContainer(
+  container,
+  results,
+  dimensionSource,
+  onLabelSelect,
+) {
   const image = dimensionSource ?? container.querySelector("img");
   if (!image) {
     return;
@@ -108,7 +118,7 @@ export function renderBoundingBoxesOnContainer(container, results, dimensionSour
     return;
   }
 
-  drawBoundingBoxes(container, results, dimensionSource);
+  drawBoundingBoxes(container, results, dimensionSource, onLabelSelect);
 }
 
 function boxToPercentages(box, image) {

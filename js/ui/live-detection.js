@@ -30,6 +30,7 @@ import {
   getUnexportedRecordingCount,
   logDetectionFrame,
   markRecordingsExported,
+  onLiveDetectionLogUpdated,
   startRecording,
   stopRecording,
 } from "../live/detection-log.js";
@@ -52,20 +53,16 @@ import {
   syncModelPickers,
 } from "./sidebar.js";
 import { getSelectedRecordingId } from "./app-mode.js";
+import { initLiveAnnotate } from "./live-annotate.js";
 
 const ROLLING_WINDOW = 30;
 // Cap the longest edge at 640px so full-resolution camera frames don't exhaust memory on mobile Safari.
 const MAX_INFERENCE_EDGE = 640;
 
-// Coarse-pointer devices (iPad etc.) wait ~700ms between completed inferences so memory can release; desktop stays 0.
-function resolveInferenceIntervalMs() {
-  const coarsePointer =
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(pointer: coarse)").matches;
-  return coarsePointer ? 700 : 0;
+function inferenceIntervalMsFromSettings() {
+  const rate = Number(getSettings().analysesPerSecond) || 2;
+  return 1000 / Math.max(1, rate);
 }
-
-const INFERENCE_INTERVAL_MS = resolveInferenceIntervalMs();
 
 function createLiveMetricsTracker() {
   const inferenceTimes = [];
@@ -252,6 +249,8 @@ export function initLiveDetectionPage() {
   let frameW = 0;
   let frameH = 0;
   let logGeneration = 0;
+  // label -> last logged timestamp (ms); at most one AI row per label per second.
+  const lastLoggedLabelAt = new Map();
 
   const momentRecorder = createMomentRecorder({
     getVideo: () => video,
@@ -260,6 +259,14 @@ export function initLiveDetectionPage() {
     getHeading: () => compass?.getReading()?.cameraHeading ?? null,
     onFrame: (frame) => addRecordingFrame(frame),
     onLevel: (level) => setMicLevel(level),
+  });
+
+  const annotate = initLiveAnnotate({
+    getGpsFix: () => gps?.getFix() ?? gpsFix,
+    getOrientation: () => compass?.getReading() ?? null,
+  });
+  onLiveDetectionLogUpdated(() => {
+    updateMetricsPanel();
   });
 
   // A metric can appear in both the sidebar and the phone status strip.
@@ -358,6 +365,38 @@ export function initLiveDetectionPage() {
     trackTimerId = window.setInterval(logGpsTrackPoint, TRACK_INTERVAL_MS);
   }
 
+  function filterByMinConfidence(items) {
+    const minConfidence = Number(getSettings().minConfidence) || 0.2;
+    return (items ?? []).filter(
+      (item) => Number(item.score ?? item.confidence) >= minConfidence,
+    );
+  }
+
+  // One row per label per second while recording; keep the highest confidence.
+  function detectionsForLog(detections, now = Date.now()) {
+    const bestByLabel = new Map();
+    for (const detection of detections ?? []) {
+      const label = String(detection.label ?? "").trim();
+      if (!label) {
+        continue;
+      }
+      const existing = bestByLabel.get(label);
+      if (!existing || Number(detection.score) > Number(existing.score)) {
+        bestByLabel.set(label, detection);
+      }
+    }
+    const out = [];
+    for (const [label, detection] of bestByLabel) {
+      const lastAt = lastLoggedLabelAt.get(label) ?? 0;
+      if (now - lastAt < 1000) {
+        continue;
+      }
+      lastLoggedLabelAt.set(label, now);
+      out.push(detection);
+    }
+    return out;
+  }
+
   function renderClassificationReadout(predictions) {
     const readout = document.getElementById("class-readout");
     if (!readout) {
@@ -371,11 +410,26 @@ export function initLiveDetectionPage() {
     readout.replaceChildren(
       ...predictions.map((item) => {
         const li = document.createElement("li");
-        li.textContent = `${item.label} — ${item.score.toFixed(2)}`;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "class-readout__chip";
+        button.textContent = `${item.label} — ${item.score.toFixed(2)}`;
+        button.addEventListener("click", () => {
+          annotate.selectLabel(item.label);
+        });
+        li.appendChild(button);
         return li;
       }),
     );
     readout.hidden = false;
+  }
+
+  function syncAnnotateReady() {
+    const fix = gps?.getFix() ?? gpsFix;
+    annotate.setLiveReady({
+      running,
+      hasGps: fix?.lat != null && fix?.lon != null,
+    });
   }
 
   function updateControls() {
@@ -394,6 +448,7 @@ export function initLiveDetectionPage() {
     feed.hidden = !running;
     idle.hidden = running;
     clearButton.disabled = getRecordings().length === 0;
+    syncAnnotateReady();
   }
 
   async function beginRecording() {
@@ -483,11 +538,9 @@ export function initLiveDetectionPage() {
     if (isRecording && !getSettings().showAiWhileRecording) {
       return;
     }
-    // Throttle from last *completed* inference, not last tick, so a slow frame still gets breathing room.
-    if (
-      INFERENCE_INTERVAL_MS > 0 &&
-      performance.now() - lastCompletedInferenceAt < INFERENCE_INTERVAL_MS
-    ) {
+    // Throttle from last *completed* inference using Analyses per second (all devices).
+    const intervalMs = inferenceIntervalMsFromSettings();
+    if (performance.now() - lastCompletedInferenceAt < intervalMs) {
       return;
     }
 
@@ -521,7 +574,8 @@ export function initLiveDetectionPage() {
 
     try {
       if (task === "classification") {
-        const predictions = await classifyImageFromSource(input, { topK: 3 });
+        const rawPredictions = await classifyImageFromSource(input, { topK: 3 });
+        const predictions = filterByMinConfidence(rawPredictions);
         const inferenceMs = performance.now() - t0;
         lastCompletedInferenceAt = performance.now();
         console.log(`[TIMING] live: ${inferenceMs.toFixed(0)}ms`);
@@ -532,24 +586,30 @@ export function initLiveDetectionPage() {
         } else {
           renderClassificationReadout(null);
         }
+        annotate.recordAnalysis(predictions.map((item) => item.label));
 
         if (isRecording && generation === logGeneration) {
-          logDetectionFrame({
-            detections: predictions.map((item) => ({
+          const logged = detectionsForLog(
+            predictions.map((item) => ({
               label: item.label,
               score: item.score,
               rank: item.rank,
               box: null,
             })),
-            frameW,
-            frameH,
-            inferenceMs,
-            timestamp: Date.now(),
-            gpsFix: gps?.getFix() ?? null,
-            orientation,
-            backend: backendInfo,
-            modelId: getModelId(),
-          });
+          );
+          if (logged.length) {
+            logDetectionFrame({
+              detections: logged,
+              frameW,
+              frameH,
+              inferenceMs,
+              timestamp: Date.now(),
+              gpsFix: gps?.getFix() ?? null,
+              orientation,
+              backend: backendInfo,
+              modelId: getModelId(),
+            });
+          }
         }
       } else {
         const rawDetections = await detectObjectsFromSource(input, {
@@ -562,7 +622,7 @@ export function initLiveDetectionPage() {
         metrics.recordInferenceMs(inferenceMs);
         const cameraHeading = orientation?.cameraHeading ?? null;
         const gpsFix = gps?.getFix() ?? null;
-        const detections = rawDetections.map((detection) => {
+        const detections = filterByMinConfidence(rawDetections).map((detection) => {
           const bearing = objectBearing(detection.box, frameW, frameH, cameraHeading);
           const distance = estimateDistance(detection.label, detection.box, frameW, frameH);
           const estimate = projectPosition(gpsFix, bearing, distance, orientation);
@@ -577,23 +637,32 @@ export function initLiveDetectionPage() {
         });
         if (showAiOverlays()) {
           renderClassificationReadout(null);
-          renderBoundingBoxesOnContainer(mediaWrap, detections, frameCanvas);
+          renderBoundingBoxesOnContainer(
+            mediaWrap,
+            detections,
+            frameCanvas,
+            (label) => annotate.selectLabel(label),
+          );
         } else {
           clearAiOverlays();
         }
+        annotate.recordAnalysis(detections.map((item) => item.label));
 
         if (isRecording && generation === logGeneration) {
-          logDetectionFrame({
-            detections,
-            frameW,
-            frameH,
-            inferenceMs,
-            timestamp: Date.now(),
-            gpsFix,
-            orientation,
-            backend: backendInfo,
-            modelId: getModelId(),
-          });
+          const logged = detectionsForLog(detections);
+          if (logged.length) {
+            logDetectionFrame({
+              detections: logged,
+              frameW,
+              frameH,
+              inferenceMs,
+              timestamp: Date.now(),
+              gpsFix,
+              orientation,
+              backend: backendInfo,
+              modelId: getModelId(),
+            });
+          }
         }
       }
       updateMetricsPanel();
@@ -650,6 +719,8 @@ export function initLiveDetectionPage() {
       gps = createGpsTracker((fix) => {
         gpsFix = fix;
         updateMetricsPanel();
+        syncAnnotateReady();
+        annotate.refresh();
       });
       gps.start();
 
@@ -669,7 +740,9 @@ export function initLiveDetectionPage() {
         );
         compass.start();
       });
-      console.log(`[LIVE] INFERENCE_INTERVAL_MS=${INFERENCE_INTERVAL_MS}`);
+      console.log(
+        `[LIVE] analysesPerSecond=${getSettings().analysesPerSecond} intervalMs=${inferenceIntervalMsFromSettings()}`,
+      );
       loop();
     } catch (error) {
       setLiveDetectionActive(false);
@@ -727,6 +800,7 @@ export function initLiveDetectionPage() {
         await momentRecorder.cancel();
       }
       logGeneration += 1;
+      lastLoggedLabelAt.clear();
       clearLiveDetectionLog();
       updateControls();
       updateMetricsPanel();

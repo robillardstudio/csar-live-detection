@@ -87,10 +87,44 @@
           <p class="live-card__logged-value" data-metric="logged">0</p>
         </section>
 
+        <section class="live-card live-card--nearby" data-show-in="live" data-nearby-window>
+          <h2 class="live-card__label">AI labels</h2>
+          <p class="nearby-labels__subtitle">newest first · around you</p>
+          <label class="setting-check">
+            <input type="checkbox" id="setting-nearby-hold" data-nearby-hold>
+            <span>Hold</span>
+          </label>
+          <ul class="nearby-labels" data-nearby-labels></ul>
+          <div class="nearby-actions" data-nearby-actions>
+            <button type="button" class="btn btn--primary btn--add" data-annotate-action="add" aria-disabled="true">+ Add</button>
+            <button type="button" class="btn btn--secondary" data-annotate-action="replace" aria-disabled="true" title="Select a label first">Replace</button>
+            <button type="button" class="btn btn--secondary" data-annotate-action="delete" aria-disabled="true" title="Select a label first">Delete</button>
+            <button type="button" class="btn btn--quiet nearby-actions__clear" data-annotate-action="deselect" hidden aria-label="Deselect">×</button>
+          </div>
+          <p class="nearby-actions__hint" data-nearby-hint>Start live detection to annotate</p>
+        </section>
+
+        <section class="live-card">
+          <h2 class="live-card__label">Live analysis</h2>
+          <label class="setting-field" for="setting-analyses-per-second">
+            <span class="setting-field__label">Analyses per second</span>
+            <select id="setting-analyses-per-second" class="setting-field__input model-picker">
+              <option value="1">1</option>
+              <option value="2" selected>2</option>
+              <option value="5">5</option>
+              <option value="10">10</option>
+            </select>
+          </label>
+          <label class="setting-field" for="setting-min-confidence">
+            <span class="setting-field__label">Min confidence <span id="setting-min-confidence-value">0.20</span></span>
+            <input type="range" id="setting-min-confidence" class="setting-field__input" min="0.05" max="0.9" step="0.05" value="0.20">
+          </label>
+        </section>
+
         <section class="live-card">
           <h2 class="live-card__label">Recording</h2>
           <label class="setting-check">
-            <input type="checkbox" id="setting-show-ai-while-recording">
+            <input type="checkbox" id="setting-show-ai-while-recording" checked>
             <span>Show AI while recording</span>
           </label>
         </section>
@@ -159,6 +193,27 @@
         <button type="button" id="btn-details" class="btn btn--secondary" aria-expanded="false" aria-controls="sidebar">Details</button>
       </section>
 
+      <section class="nearby-strip" data-show-in="live" data-nearby-window aria-label="AI labels">
+        <div class="nearby-strip__header">
+          <div>
+            <h2 class="nearby-strip__title">AI labels</h2>
+            <p class="nearby-labels__subtitle">newest first · around you</p>
+          </div>
+          <label class="setting-check setting-check--inline">
+            <input type="checkbox" data-nearby-hold>
+            <span>Hold</span>
+          </label>
+        </div>
+        <ul class="nearby-labels" data-nearby-labels></ul>
+        <div class="nearby-actions" data-nearby-actions>
+          <button type="button" class="btn btn--primary btn--add" data-annotate-action="add" aria-disabled="true">+ Add</button>
+          <button type="button" class="btn btn--secondary" data-annotate-action="replace" aria-disabled="true" title="Select a label first">Replace</button>
+          <button type="button" class="btn btn--secondary" data-annotate-action="delete" aria-disabled="true" title="Select a label first">Delete</button>
+          <button type="button" class="btn btn--quiet nearby-actions__clear" data-annotate-action="deselect" hidden aria-label="Deselect">×</button>
+        </div>
+        <p class="nearby-actions__hint" data-nearby-hint>Start live detection to annotate</p>
+      </section>
+
       <section id="review-panel" class="review-panel hidden" aria-label="Review">
         <p id="review-empty" class="review-panel__empty hidden">No recordings yet — switch to Live and press Start Recording.</p>
         <div id="review-body" class="review-panel__body hidden">
@@ -173,6 +228,13 @@
           </div>
 
           <section id="session-map" class="session-map" role="tabpanel" aria-labelledby="tab-map">
+            <label class="map-label-view" for="map-label-view">
+              <span class="setting-field__label">Machine labels</span>
+              <select id="map-label-view" class="model-picker" aria-label="Machine label view">
+                <option value="raw">Show machine labels as recorded</option>
+                <option value="coannotated" selected>Show machine labels as co-annotated</option>
+              </select>
+            </label>
             <p id="map-empty" class="session-map__empty hidden">No location data in this selection.</p>
             <p id="map-error" class="session-map__empty hidden">The map could not be loaded.</p>
             <p id="map-objects-empty" class="session-map__note hidden">No object positions were estimated in this session. Estimates need GPS, a compass reading within ±30°, and a label with a known size that isn't cut off by the frame edge.</p>
@@ -218,6 +280,12 @@
                 <div id="summary-recordings-body" class="moment-list"></div>
               </section>
 
+              <section id="summary-user-annotations" class="live-card hidden">
+                <h2 class="live-card__label">User annotations</h2>
+                <p id="summary-user-count" class="summary-text"></p>
+                <ul id="summary-user-list" class="user-annotation-list"></ul>
+              </section>
+
               <section class="live-card">
                 <h2 class="live-card__label">Top labels</h2>
                 <div class="summary-chart">
@@ -230,6 +298,20 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <div id="annotate-backdrop" class="annotate-backdrop" hidden></div>
+  <div id="annotate-sheet" class="annotate-sheet" hidden role="dialog" aria-modal="true" aria-labelledby="annotate-sheet-title">
+    <h2 id="annotate-sheet-title" class="annotate-sheet__title">New label</h2>
+    <p id="annotate-sheet-about" class="annotate-sheet__about" hidden></p>
+    <label class="annotate-sheet__field" for="annotate-input">
+      <span class="setting-field__label">Annotation</span>
+      <input type="text" id="annotate-input" class="setting-field__input" autocomplete="off" enterkeyhint="done" placeholder="Type or dictate…">
+    </label>
+    <div class="annotate-sheet__actions">
+      <button type="button" id="btn-annotate-cancel" class="btn btn--secondary">Cancel</button>
+      <button type="button" id="btn-annotate-save" class="btn btn--primary">Save</button>
+    </div>
   </div>
 
   <script type="module" src="js/main.js"></script>

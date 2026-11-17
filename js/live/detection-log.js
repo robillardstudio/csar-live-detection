@@ -6,8 +6,195 @@ const recordings = [];
 let activeRecording = null;
 const exportedIds = new Set();
 let sessionStart = null;
+let nextRowId = 1;
 const clearListeners = new Set();
 const updateListeners = new Set();
+const logListeners = new Set();
+
+const NEARBY_RADIUS_M = 5;
+const NEARBY_ACCURACY_LIMIT_M = 15;
+const NEARBY_FALLBACK_MS = 30_000;
+
+function notifyLogListeners() {
+  for (const listener of logListeners) {
+    listener();
+  }
+}
+
+export function onLiveDetectionLogUpdated(listener) {
+  logListeners.add(listener);
+  return () => logListeners.delete(listener);
+}
+
+function toRad(degrees) {
+  return (degrees * Math.PI) / 180;
+}
+
+export function haversineMeters(a, b) {
+  const R = 6371000;
+  const dLat = toRad(b.lat - a.lat);
+  const dLon = toRad(b.lon - a.lon);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+export function isAiRow(row) {
+  return (row?.source ?? "ai") !== "user";
+}
+
+export function isUserAnnotationRow(row) {
+  return row?.source === "user";
+}
+
+export function isSuppressingAction(row) {
+  return (
+    isUserAnnotationRow(row) &&
+    (row.action === "delete" || row.action === "replace")
+  );
+}
+
+// Latest delete/replace for a label near a point (within 5 m). Does not mutate AI rows.
+export function getLabelSuppressionAt(label, lat, lon, rows = log) {
+  if (!label || lat == null || lon == null) {
+    return null;
+  }
+  let latest = null;
+  for (const row of rows) {
+    if (!isSuppressingAction(row)) {
+      continue;
+    }
+    if ((row.refers_to_label || "").trim() !== label) {
+      continue;
+    }
+    if (row.lat == null || row.lon == null) {
+      continue;
+    }
+    if (
+      haversineMeters(
+        { lat, lon },
+        { lat: Number(row.lat), lon: Number(row.lon) },
+      ) > NEARBY_RADIUS_M
+    ) {
+      continue;
+    }
+    if (!latest || Number(row.timestamp) >= Number(latest.timestamp)) {
+      latest = row;
+    }
+  }
+  return latest;
+}
+
+function suppressedLabelsNear(gpsFix, now, rows = log) {
+  const suppressed = new Set();
+  const accuracy = gpsFix?.accuracy;
+  const useSpatial =
+    gpsFix?.lat != null &&
+    gpsFix?.lon != null &&
+    (accuracy == null || accuracy <= NEARBY_ACCURACY_LIMIT_M);
+
+  for (const row of rows) {
+    if (!isSuppressingAction(row)) {
+      continue;
+    }
+    const label = (row.refers_to_label || "").trim();
+    if (!label) {
+      continue;
+    }
+    if (useSpatial) {
+      if (
+        row.lat == null ||
+        row.lon == null ||
+        haversineMeters(gpsFix, { lat: row.lat, lon: row.lon }) >
+          NEARBY_RADIUS_M
+      ) {
+        continue;
+      }
+    } else if (now - Number(row.timestamp) > NEARBY_FALLBACK_MS) {
+      continue;
+    }
+    suppressed.add(label);
+  }
+  return suppressed;
+}
+
+const NEARBY_MAX_LABELS = 8;
+
+// Live stable buffer + logged AI rows within 5 m when GPS accuracy ≤ 15 m.
+// Delete/replace actions hide that label here without editing original AI rows.
+export function getNearbyAiLabels(
+  gpsFix,
+  { liveStable = [], now = Date.now() } = {},
+) {
+  const suppressed = suppressedLabelsNear(gpsFix, now);
+  const byLabel = new Map();
+
+  for (const item of liveStable) {
+    const label = typeof item?.label === "string" ? item.label.trim() : "";
+    if (!label || suppressed.has(label)) {
+      continue;
+    }
+    byLabel.set(label, {
+      label,
+      count: item.count ?? 1,
+      lastTimestamp: Number(item.lastTimestamp) || now,
+      refersToRow: item.refersToRow ?? null,
+    });
+  }
+
+  const accuracy = gpsFix?.accuracy;
+  const useLogged =
+    gpsFix?.lat != null &&
+    gpsFix?.lon != null &&
+    accuracy != null &&
+    accuracy <= NEARBY_ACCURACY_LIMIT_M;
+
+  if (useLogged) {
+    for (const row of log) {
+      if (!isAiRow(row) || typeof row.label !== "string" || !row.label.trim()) {
+        continue;
+      }
+      if (row.lat == null || row.lon == null) {
+        continue;
+      }
+      if (
+        haversineMeters(gpsFix, { lat: row.lat, lon: row.lon }) > NEARBY_RADIUS_M
+      ) {
+        continue;
+      }
+      const label = row.label.trim();
+      if (suppressed.has(label)) {
+        continue;
+      }
+      const existing = byLabel.get(label);
+      const ts = Number(row.timestamp);
+      if (!existing) {
+        byLabel.set(label, {
+          label,
+          count: 1,
+          lastTimestamp: ts,
+          refersToRow: row.id ?? row.timestamp,
+        });
+        continue;
+      }
+      existing.count += 1;
+      if (ts >= existing.lastTimestamp) {
+        existing.lastTimestamp = ts;
+        existing.refersToRow = row.id ?? row.timestamp;
+      }
+    }
+  }
+
+  return [...byLabel.values()]
+    .sort(
+      (a, b) =>
+        b.lastTimestamp - a.lastTimestamp || a.label.localeCompare(b.label),
+    )
+    .slice(0, NEARBY_MAX_LABELS);
+}
 
 export function getLiveDetectionSessionStart() {
   return sessionStart;
@@ -107,8 +294,6 @@ export function trackDistanceMeters(track) {
   if (!track?.length) {
     return 0;
   }
-  const toRad = (degrees) => (degrees * Math.PI) / 180;
-  const R = 6371000;
   let sum = 0;
   for (let i = 1; i < track.length; i += 1) {
     const a = track[i - 1];
@@ -121,14 +306,7 @@ export function trackDistanceMeters(track) {
     ) {
       continue;
     }
-    const dLat = toRad(b.lat - a.lat);
-    const dLon = toRad(b.lon - a.lon);
-    const lat1 = toRad(a.lat);
-    const lat2 = toRad(b.lat);
-    const h =
-      Math.sin(dLat / 2) ** 2 +
-      Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
-    sum += 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+    sum += haversineMeters(a, b);
   }
   return sum;
 }
@@ -187,9 +365,11 @@ export function clearLiveDetectionLog() {
   activeRecording = null;
   exportedIds.clear();
   sessionStart = null;
+  nextRowId = 1;
   for (const listener of clearListeners) {
     listener();
   }
+  notifyLogListeners();
 }
 
 // Pixel bbox matches the inference frame; bbox_norm (0–1) is resolution-independent for the later AR/3D stage.
@@ -223,6 +403,7 @@ export function logDetectionFrame({
   for (const detection of detections) {
     const hasBox = detection.box != null;
     log.push({
+      id: nextRowId++,
       timestamp,
       recording_id: activeRecording?.recording_id ?? null,
       lat: gpsFix?.lat ?? null,
@@ -247,6 +428,12 @@ export function logDetectionFrame({
       label: detection.label,
       confidence: detection.score,
       rank: detection.rank ?? null,
+      source: "ai",
+      action: null,
+      user_annotation: null,
+      refers_to_label: null,
+      refers_to_row: null,
+      nearby_ai_labels: null,
       bbox: hasBox
         ? {
             xmin: detection.box.xmin,
@@ -264,5 +451,82 @@ export function logDetectionFrame({
     });
   }
 
+  if (detections.length > 0) {
+    notifyLogListeners();
+  }
   return log.length;
+}
+
+export function logUserAnnotation({
+  text = null,
+  action = "add",
+  gpsFix,
+  orientation,
+  refersToLabel = null,
+  refersToRow = null,
+  nearbyAiLabels = [],
+}) {
+  const resolvedAction = action || "add";
+  const trimmed = String(text ?? "").trim();
+  if (resolvedAction !== "delete" && !trimmed) {
+    return null;
+  }
+  if (
+    (resolvedAction === "delete" || resolvedAction === "replace") &&
+    !refersToLabel
+  ) {
+    return null;
+  }
+  const timestamp = Date.now();
+  sessionStart ??= timestamp;
+  if (activeRecording) {
+    activeRecording.row_count += 1;
+    exportedIds.delete(activeRecording.recording_id);
+  }
+  const uniqueNearby = [...new Set(nearbyAiLabels.filter(Boolean))];
+  const displayLabel =
+    resolvedAction === "delete"
+      ? refersToLabel
+      : trimmed;
+  const row = {
+    id: nextRowId++,
+    timestamp,
+    recording_id: activeRecording?.recording_id ?? null,
+    lat: gpsFix?.lat ?? null,
+    lon: gpsFix?.lon ?? null,
+    gps_accuracy: gpsFix?.accuracy ?? null,
+    gps_timestamp: gpsFix?.timestamp ?? null,
+    heading: orientation?.heading ?? orientation?.cameraHeading ?? null,
+    camera_heading: orientation?.cameraHeading ?? null,
+    object_bearing: null,
+    distance_m: null,
+    distance_method: null,
+    est_lat: null,
+    est_lon: null,
+    heading_accuracy: orientation?.accuracy ?? null,
+    device_beta: orientation?.beta ?? null,
+    device_gamma: orientation?.gamma ?? null,
+    screen_angle: orientation?.screenAngle ?? null,
+    screen_orientation_type: orientation?.screenOrientationType ?? null,
+    model: null,
+    dtype: null,
+    device: null,
+    label: displayLabel,
+    confidence: null,
+    rank: null,
+    source: "user",
+    action: resolvedAction,
+    user_annotation: resolvedAction === "delete" ? null : trimmed,
+    refers_to_label: refersToLabel || null,
+    refers_to_row: refersToRow ?? null,
+    nearby_ai_labels: uniqueNearby,
+    bbox: null,
+    bbox_norm: null,
+    frame_w: null,
+    frame_h: null,
+    inference_ms: null,
+  };
+  log.push(row);
+  notifyLogListeners();
+  return row;
 }

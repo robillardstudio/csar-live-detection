@@ -42,6 +42,12 @@ const CSV_HEADERS = [
   "frame_w",
   "frame_h",
   "inference_ms",
+  "source",
+  "action",
+  "user_annotation",
+  "refers_to_label",
+  "refers_to_row",
+  "nearby_ai_labels",
   "transcript",
   "ai_description",
   "description_model",
@@ -72,6 +78,21 @@ function quoteCsvLabel(label) {
   return `"${String(label ?? "").replace(/"/g, '""')}"`;
 }
 
+function formatNearbyLabels(value) {
+  if (Array.isArray(value)) {
+    return value.join("; ");
+  }
+  return value ?? "";
+}
+
+function formatConfidence(value) {
+  if (value === null || value === undefined || value === "") {
+    return "";
+  }
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(3) : "";
+}
+
 function formatNullableNumber(value, digits) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) {
     return "";
@@ -100,11 +121,11 @@ function rowToCsvLine(row) {
     formatNullableNumber(row.device_gamma, 2),
     row.screen_angle ?? "",
     row.screen_orientation_type ?? "",
-    row.model,
-    row.dtype,
-    row.device,
+    row.model ?? "",
+    row.dtype ?? "",
+    row.device ?? "",
     quoteCsvLabel(row.label),
-    Number(row.confidence).toFixed(3),
+    formatConfidence(row.confidence),
     row.rank ?? "",
     row.bbox?.xmin ?? "",
     row.bbox?.ymin ?? "",
@@ -114,9 +135,15 @@ function rowToCsvLine(row) {
     row.bbox_norm?.ymin ?? "",
     row.bbox_norm?.xmax ?? "",
     row.bbox_norm?.ymax ?? "",
-    row.frame_w,
-    row.frame_h,
-    row.inference_ms,
+    row.frame_w ?? "",
+    row.frame_h ?? "",
+    row.inference_ms ?? "",
+    row.source ?? "",
+    row.action ?? "",
+    quoteCsvLabel(row.user_annotation),
+    quoteCsvLabel(row.refers_to_label),
+    row.refers_to_row ?? "",
+    quoteCsvLabel(formatNearbyLabels(row.nearby_ai_labels)),
     quoteCsvLabel(annotation.transcript),
     quoteCsvLabel(annotation.ai_description),
     quoteCsvLabel(annotation.description_model),

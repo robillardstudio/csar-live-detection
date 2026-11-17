@@ -17,15 +17,26 @@ const DEFAULT_PARAMETERS = {
   maxObjects: 10,
 };
 
+const liveSettings = {
+  analysesPerSecond: 2,
+  minConfidence: 0.2,
+};
+
 const recordingSettings = {
-  showAiWhileRecording: false,
+  // Blind mode is opt-in: AI labels stay visible while recording unless unchecked.
+  showAiWhileRecording: true,
   descriptionSource: "gemini:online",
 };
 
 export function getSettings() {
   return {
     analysisSettings: {},
-    parameters: { ...DEFAULT_PARAMETERS },
+    parameters: {
+      ...DEFAULT_PARAMETERS,
+      confidence: liveSettings.minConfidence,
+    },
+    analysesPerSecond: liveSettings.analysesPerSecond,
+    minConfidence: liveSettings.minConfidence,
     showAiWhileRecording: recordingSettings.showAiWhileRecording,
     descriptionSource: recordingSettings.descriptionSource,
   };
@@ -78,6 +89,32 @@ async function refreshGeminiModelPicker(select, fallback) {
 }
 
 export function initRecordingSettings() {
+  const rateSelect = document.getElementById("setting-analyses-per-second");
+  if (rateSelect) {
+    rateSelect.value = String(liveSettings.analysesPerSecond);
+    rateSelect.addEventListener("change", () => {
+      const value = Number(rateSelect.value);
+      liveSettings.analysesPerSecond = [1, 2, 5, 10].includes(value) ? value : 2;
+      rateSelect.value = String(liveSettings.analysesPerSecond);
+    });
+  }
+
+  const confidenceInput = document.getElementById("setting-min-confidence");
+  const confidenceValue = document.getElementById("setting-min-confidence-value");
+  if (confidenceInput) {
+    confidenceInput.value = String(liveSettings.minConfidence);
+    if (confidenceValue) {
+      confidenceValue.textContent = liveSettings.minConfidence.toFixed(2);
+    }
+    confidenceInput.addEventListener("input", () => {
+      const value = Math.min(0.9, Math.max(0.05, Number(confidenceInput.value) || 0.2));
+      liveSettings.minConfidence = value;
+      if (confidenceValue) {
+        confidenceValue.textContent = value.toFixed(2);
+      }
+    });
+  }
+
   const checkbox = document.getElementById("setting-show-ai-while-recording");
   if (checkbox) {
     checkbox.checked = recordingSettings.showAiWhileRecording;
