@@ -305,6 +305,7 @@ export function initLiveDetectionPage(annotate = null) {
   let switchingModel = false;
   let frozenLook = false;
   let looking = false;
+  let lookAbort = null;
   let lookDetections = [];
   let lookPrompt = null;
   let lookTimestamp = 0;
@@ -319,6 +320,10 @@ export function initLiveDetectionPage(annotate = null) {
     document.getElementById("btn-gemini-resume"),
     document.getElementById("btn-gemini-resume-sidebar"),
     document.getElementById("btn-gemini-resume-mobile"),
+  ].filter(Boolean);
+  const lookCancelButtons = [
+    document.getElementById("btn-gemini-look-cancel"),
+    document.getElementById("btn-gemini-look-cancel-mobile"),
   ].filter(Boolean);
   const lookStatusNodes = [
     document.getElementById("gemini-look-status"),
@@ -585,14 +590,23 @@ export function initLiveDetectionPage(annotate = null) {
     return captureCanvas.toDataURL("image/jpeg", 0.7);
   }
 
+  function toastLookError(message) {
+    const text = message || "look_failed";
+    showCameraFeedback(text);
+    annotate?.showStatusToast?.(text);
+  }
+
   function setLookingUi(isLooking) {
     looking = isLooking;
     for (const node of lookStatusNodes) {
       node.hidden = !isLooking;
     }
+    for (const button of lookCancelButtons) {
+      button.disabled = !isLooking;
+    }
     for (const button of lookButtons) {
       button.disabled = isLooking || !running || !isGeminiBoxes();
-      button.textContent = isLooking ? "Looking…" : "Look";
+      button.textContent = "Look";
     }
   }
 
@@ -607,10 +621,18 @@ export function initLiveDetectionPage(annotate = null) {
     for (const button of resumeButtons) {
       button.hidden = !gemini || !frozenLook;
       button.classList.toggle("hidden", button.hidden);
-      button.disabled = looking;
+      // Resume must stay tappable during Analysing… (aborts + unfreezes).
+      button.disabled = false;
     }
     for (const node of lookStatusNodes) {
       node.hidden = !looking;
+    }
+  }
+
+  function abortLookRequest() {
+    if (lookAbort) {
+      lookAbort.abort("cancelled");
+      lookAbort = null;
     }
   }
 
@@ -635,15 +657,43 @@ export function initLiveDetectionPage(annotate = null) {
     }, seconds * 1000);
   }
 
+  function clearLookOverlay() {
+    mediaWrap.querySelector(".bounding-boxes")?.remove();
+    if (freezeCanvas) {
+      freezeCanvas.hidden = true;
+    }
+  }
+
+  // Downscale for the API only — full-res freeze stays on screen for boxes.
+  function encodeLookJpeg(sourceCanvas) {
+    const maxW = 1024;
+    let width = sourceCanvas.width;
+    let height = sourceCanvas.height;
+    if (width > maxW) {
+      height = Math.max(1, Math.round((height * maxW) / width));
+      width = maxW;
+    }
+    const encodeCanvas = document.createElement("canvas");
+    encodeCanvas.width = width;
+    encodeCanvas.height = height;
+    const ctx = encodeCanvas.getContext("2d");
+    ctx.drawImage(sourceCanvas, 0, 0, width, height);
+    return new Promise((resolve, reject) => {
+      encodeCanvas.toBlob(
+        (blob) => (blob ? resolve(blob) : reject(new Error("encode_failed"))),
+        "image/jpeg",
+        0.8,
+      );
+    });
+  }
+
   function resumeFromLook() {
+    abortLookRequest();
     frozenLook = false;
     lookDetections = [];
     lookPrompt = null;
     lookTimestamp = 0;
-    if (freezeCanvas) {
-      freezeCanvas.hidden = true;
-    }
-    mediaWrap.querySelector(".bounding-boxes")?.remove();
+    clearLookOverlay();
     if (video.srcObject && video.paused) {
       void video.play().catch(() => {});
     }
@@ -654,30 +704,38 @@ export function initLiveDetectionPage(annotate = null) {
     scheduleAutoLook();
   }
 
+  function cancelGeminiLook() {
+    if (!looking) {
+      return;
+    }
+    abortLookRequest();
+  }
+
   async function runGeminiLook() {
+    // isLooking guard — Auto-look must not stack a second in-flight request.
     if (!running || looking || !isGeminiBoxes()) {
       return;
     }
     if (!hasGeminiApiKey()) {
-      annotate?.showStatusToast?.(
-        "missing_api_key — add a Gemini API key in settings",
-      );
+      toastLookError("missing_api_key — add a Gemini API key in settings");
       return;
     }
     if (!video.videoWidth || !video.videoHeight) {
-      annotate?.showStatusToast?.("no_frame — camera is not ready");
+      toastLookError("no_frame — camera is not ready");
+      return;
+    }
+    if (!freezeCanvas) {
+      toastLookError("freeze_canvas_missing");
       return;
     }
 
     clearAutoLookTimer();
+    lookAbort = new AbortController();
+    const signal = lookAbort.signal;
     setLookingUi(true);
 
     const width = video.videoWidth;
     const height = video.videoHeight;
-    if (!freezeCanvas) {
-      setLookingUi(false);
-      return;
-    }
     freezeCanvas.width = width;
     freezeCanvas.height = height;
     const ctx = freezeCanvas.getContext("2d");
@@ -689,16 +747,20 @@ export function initLiveDetectionPage(annotate = null) {
     annotate?.setLiveAnnotateState({ frozen: true });
     syncLookControls();
 
-    const jpeg = await new Promise((resolve) => {
-      freezeCanvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.85);
-    });
-
     const t0 = performance.now();
     try {
+      const jpeg = await encodeLookJpeg(freezeCanvas);
+      if (signal.aborted) {
+        throw new Error("cancelled");
+      }
       const result = await detectBoxesInImage({
         image: jpeg,
         prompt: BOXES_PROMPT,
+        signal,
       });
+      if (signal.aborted) {
+        throw new Error("cancelled");
+      }
       const inferenceMs = performance.now() - t0;
       lookPrompt = result.prompt;
       const detections = (result.items || [])
@@ -781,9 +843,13 @@ export function initLiveDetectionPage(annotate = null) {
       updateMetricsPanel();
     } catch (error) {
       const message = error?.message || "look_failed";
-      annotate?.showStatusToast?.(`${message}`);
       console.error("[GEMINI] look failed:", message);
+      // Resume aborts too — only toast Cancel / real errors while still frozen.
+      if (message !== "cancelled" || frozenLook) {
+        toastLookError(message);
+      }
     } finally {
+      lookAbort = null;
       setLookingUi(false);
       syncLookControls();
     }
@@ -1499,6 +1565,9 @@ export function initLiveDetectionPage(annotate = null) {
   }
   for (const button of resumeButtons) {
     button.addEventListener("click", resumeFromLook);
+  }
+  for (const button of lookCancelButtons) {
+    button.addEventListener("click", cancelGeminiLook);
   }
   for (const select of document.querySelectorAll(
     "#setting-gemini-auto-look, #setting-gemini-auto-look-mobile",

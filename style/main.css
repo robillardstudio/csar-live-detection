@@ -649,6 +649,7 @@ button:active {
   position: relative;
   width: 100%;
   height: 100%;
+  overflow: hidden;
 }
 
 .live-stage__video {
@@ -668,6 +669,7 @@ button:active {
   object-fit: contain;
   background: #111;
   z-index: 1;
+  pointer-events: none;
 }
 
 .gemini-look-row {
@@ -676,6 +678,16 @@ button:active {
   align-items: center;
   gap: 8px;
   margin-top: 8px;
+}
+
+.gemini-look-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gemini-look-status[hidden] {
+  display: none !important;
 }
 
 .live-stage__idle {
@@ -1174,7 +1186,8 @@ button:active {
 }
 
 .bounding-boxes.is-interactive {
-  pointer-events: auto;
+  /* Layer must not steal taps outside boxes (Resume / Stop / model pickers). */
+  pointer-events: none;
 }
 
 .bounding-box {

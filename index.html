@@ -58,7 +58,10 @@
           <div class="gemini-look-row">
             <button type="button" id="btn-gemini-look-sidebar" class="btn btn--outline" hidden>Look</button>
             <button type="button" id="btn-gemini-resume-sidebar" class="btn btn--outline" hidden>Resume</button>
-            <span id="gemini-look-status" class="muted" hidden>Looking…</span>
+            <span id="gemini-look-status" class="gemini-look-status muted" hidden>
+              Analysing…
+              <button type="button" id="btn-gemini-look-cancel" class="btn btn--outline">Cancel</button>
+            </span>
           </div>
         </section>
 
@@ -177,7 +180,10 @@
               <div class="gemini-look-row mobile-only" id="gemini-look-mobile" hidden>
                 <button type="button" id="btn-gemini-look-mobile" class="btn btn-primary">Look</button>
                 <button type="button" id="btn-gemini-resume-mobile" class="btn btn-stop" hidden>Resume</button>
-                <span id="gemini-look-status-mobile" class="muted" hidden>Looking…</span>
+                <span id="gemini-look-status-mobile" class="gemini-look-status muted" hidden>
+                  Analysing…
+                  <button type="button" id="btn-gemini-look-cancel-mobile" class="btn btn-stop">Cancel</button>
+                </span>
               </div>
               <button type="button" id="btn-live-stop" class="btn btn-stop">Stop detection</button>
             </div>

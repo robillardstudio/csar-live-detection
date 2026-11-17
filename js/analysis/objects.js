@@ -188,12 +188,15 @@ export function renderBoundingBoxesOnContainer(
   }
   if (typeof onSelectLabel === "function") {
     layer.classList.add("is-interactive");
-    layer.addEventListener("click", (event) => {
-      const box = event.target.closest(".bounding-box[data-label]");
-      if (!box) {
+    // pointerup (no preventDefault) — works for touch on iPad WebKit without blocking the page.
+    layer.addEventListener("pointerup", (event) => {
+      if (event.pointerType === "mouse" && event.button !== 0) {
         return;
       }
-      event.preventDefault();
+      const box = event.target.closest(".bounding-box[data-label]");
+      if (!box || !layer.contains(box)) {
+        return;
+      }
       onSelectLabel(box.dataset.label);
     });
   }

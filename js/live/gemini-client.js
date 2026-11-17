@@ -266,18 +266,24 @@ async function generateContent({
   apiKey,
   generationConfig,
   timeoutMs,
+  signal: externalSignal,
 }) {
   const model = modelId || getGeminiModelId();
   const key = apiKey || getGeminiApiKey();
   if (!key) {
     throw new Error("missing_api_key");
   }
+  if (externalSignal?.aborted) {
+    throw new Error("cancelled");
+  }
   await ensureValidModel(model, key);
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const controller = new AbortController();
   const waitMs = Number(timeoutMs) > 0 ? Number(timeoutMs) : REQUEST_TIMEOUT_MS;
-  const timer = window.setTimeout(() => controller.abort(), waitMs);
+  const timer = window.setTimeout(() => controller.abort("timeout"), waitMs);
+  const onExternalAbort = () => controller.abort("cancelled");
+  externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
   console.log("[GEMINI] request model=", model, "parts=", parts.length);
   try {
     const response = await fetch(url, {
@@ -307,8 +313,11 @@ async function generateContent({
     }
     return text;
   } catch (error) {
-    if (error?.name === "AbortError") {
-      const message = `timeout after ${waitMs / 1000}s`;
+    if (error?.name === "AbortError" || controller.signal.aborted) {
+      const cancelled = externalSignal?.aborted || controller.signal.reason === "cancelled";
+      const message = cancelled
+        ? "cancelled"
+        : `timeout after ${waitMs / 1000}s`;
       console.error("[GEMINI]", message);
       throw new Error(message);
     }
@@ -318,6 +327,7 @@ async function generateContent({
     throw error;
   } finally {
     window.clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", onExternalAbort);
   }
 }
 
@@ -512,8 +522,12 @@ export async function detectBoxesInImage({
   prompt = BOXES_PROMPT,
   modelId,
   apiKey,
+  signal,
 } = {}) {
   const imagePart = await imagePartFromInput(image);
+  if (signal?.aborted) {
+    throw new Error("cancelled");
+  }
   const text = await generateContent({
     modelId: modelId || getGeminiModelId(),
     apiKey,
@@ -522,6 +536,7 @@ export async function detectBoxesInImage({
       responseMimeType: "application/json",
     },
     timeoutMs: LOOK_TIMEOUT_MS,
+    signal,
   });
   return {
     prompt,
