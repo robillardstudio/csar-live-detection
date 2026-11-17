@@ -175,6 +175,10 @@ function formatHeading(reading, status = null, compassTracker = null) {
       available: true,
     };
   }
+  const relativeOnly =
+    status === "relative-only" ||
+    reading?.relativeOnly === true ||
+    compassTracker?.isRelativeOnly?.() === true;
   const reason =
     status === "denied"
       ? "Permission denied"
@@ -182,7 +186,9 @@ function formatHeading(reading, status = null, compassTracker = null) {
         ? "Not supported"
         : status === "waiting"
           ? "Waiting for compass…"
-          : "No sensor events";
+          : relativeOnly
+            ? "Relative only (no north reference)"
+            : "No sensor events";
   return { main: reason, detail: debugLine, available: false };
 }
 
@@ -1155,14 +1161,15 @@ export function initLiveDetectionPage(annotate = null) {
       annotate?.setLiveAnnotateState({ orientation: reading });
     });
     compass.start();
-    // Only "No sensor events" after 3s with no absolute/orientation callbacks.
+    // After 3s: absolute heading, relative-only, or truly no events.
     window.setTimeout(() => {
       if (!running || !compass || compass.getReading()?.heading != null) {
         return;
       }
-      setHeading(
-        formatHeading(compass.getReading(), "no-events", compass),
-      );
+      const status = compass.isRelativeOnly?.()
+        ? "relative-only"
+        : "no-events";
+      setHeading(formatHeading(compass.getReading(), status, compass));
     }, 3000);
   }
 

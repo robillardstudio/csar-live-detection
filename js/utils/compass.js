@@ -57,6 +57,8 @@ export function createCompassTracker(onReading) {
     deviceorientationabsolute: 0,
     deviceorientation: 0,
   };
+  let absoluteLogged = false;
+  let relativeLogged = false;
   let lastDebug = {
     events: "none",
     alpha: "—",
@@ -64,60 +66,139 @@ export function createCompassTracker(onReading) {
     type: "—",
   };
 
-  // Same heading rules as the working 3f0c294 version.
-  function handleOrientation(event) {
-    const type = event.type || "deviceorientation";
-    if (type in fired) {
-      fired[type] += 1;
-    }
+  function publish(partial) {
+    const screenAngle = readScreenAngle();
+    const heading = partial.heading;
+    cachedReading = {
+      heading,
+      cameraHeading: toCameraHeading(heading, screenAngle),
+      accuracy: partial.accuracy ?? null,
+      accuracySupported: partial.accuracySupported ?? false,
+      beta: partial.beta ?? null,
+      gamma: partial.gamma ?? null,
+      screenAngle,
+      screenOrientationType: readScreenOrientationType(),
+      receivedEvent: true,
+      relativeOnly: partial.relativeOnly === true,
+      debug: lastDebug,
+    };
+    onReading?.(cachedReading);
+  }
 
-    let heading = null;
-    let accuracy = null;
-    // Only iOS reports compass accuracy; elsewhere a missing accuracy just means "not reported".
-    const accuracySupported = Number.isFinite(event.webkitCompassHeading);
-    if (accuracySupported) {
-      heading = normalizeDegrees(event.webkitCompassHeading);
-      // iOS reports a negative accuracy when the compass is uncalibrated.
-      accuracy =
-        event.webkitCompassAccuracy >= 0 ? event.webkitCompassAccuracy : null;
-    } else if (
-      (type === "deviceorientationabsolute" || event.absolute === true) &&
-      Number.isFinite(event.alpha)
-    ) {
-      heading = normalizeDegrees(360 - event.alpha);
-    }
-
+  function updateDebug(event, type) {
     lastDebug = {
       events: `abs=${fired.deviceorientationabsolute} ori=${fired.deviceorientation}`,
       alpha: Number.isFinite(event.alpha) ? String(Math.round(event.alpha)) : "—",
       absolute: String(event.absolute),
       type,
     };
+  }
 
-    const screenAngle = readScreenAngle();
-    cachedReading = {
+  // Chrome Android: north-referenced alpha arrives on this event (deviceorientation stays absolute=false).
+  function handleAbsolute(event) {
+    fired.deviceorientationabsolute += 1;
+    if (!absoluteLogged) {
+      absoluteLogged = true;
+      console.log(
+        "[COMPASS] deviceorientationabsolute fired",
+        `alpha=${event.alpha}`,
+        `absolute=${event.absolute}`,
+      );
+    }
+    updateDebug(event, "deviceorientationabsolute");
+
+    let heading = null;
+    let accuracy = null;
+    const accuracySupported = Number.isFinite(event.webkitCompassHeading);
+    if (accuracySupported) {
+      heading = normalizeDegrees(event.webkitCompassHeading);
+      accuracy =
+        event.webkitCompassAccuracy >= 0 ? event.webkitCompassAccuracy : null;
+    } else if (Number.isFinite(event.alpha)) {
+      heading = normalizeDegrees(360 - event.alpha);
+    }
+
+    publish({
       heading,
-      cameraHeading: toCameraHeading(heading, screenAngle),
       accuracy,
       accuracySupported,
       beta: finiteOrNull(event.beta),
       gamma: finiteOrNull(event.gamma),
-      screenAngle,
-      screenOrientationType: readScreenOrientationType(),
-      receivedEvent: true,
-      debug: lastDebug,
-    };
-    onReading?.(cachedReading);
+      relativeOnly: false,
+    });
+  }
+
+  function handleOrientation(event) {
+    fired.deviceorientation += 1;
+    if (!relativeLogged) {
+      relativeLogged = true;
+      console.log(
+        "[COMPASS] deviceorientation fired",
+        `alpha=${event.alpha}`,
+        `absolute=${event.absolute}`,
+      );
+    }
+    updateDebug(event, "deviceorientation");
+
+    // Absolute event already provides a north reference — don't let relative overwrite it.
+    if (fired.deviceorientationabsolute > 0 || cachedReading?.heading != null) {
+      if (cachedReading) {
+        cachedReading = { ...cachedReading, debug: lastDebug };
+        onReading?.(cachedReading);
+      }
+      return;
+    }
+
+    // iOS: heading lives on deviceorientation via webkitCompassHeading.
+    if (Number.isFinite(event.webkitCompassHeading)) {
+      const accuracy =
+        event.webkitCompassAccuracy >= 0 ? event.webkitCompassAccuracy : null;
+      publish({
+        heading: normalizeDegrees(event.webkitCompassHeading),
+        accuracy,
+        accuracySupported: true,
+        beta: finiteOrNull(event.beta),
+        gamma: finiteOrNull(event.gamma),
+        relativeOnly: false,
+      });
+      return;
+    }
+
+    // Some browsers set absolute=true on plain deviceorientation.
+    if (event.absolute === true && Number.isFinite(event.alpha)) {
+      publish({
+        heading: normalizeDegrees(360 - event.alpha),
+        accuracy: null,
+        accuracySupported: false,
+        beta: finiteOrNull(event.beta),
+        gamma: finiteOrNull(event.gamma),
+        relativeOnly: false,
+      });
+      return;
+    }
+
+    // Relative-only: tilt is fine, but alpha is not north-referenced — do not use for bearings.
+    publish({
+      heading: null,
+      accuracy: null,
+      accuracySupported: false,
+      beta: finiteOrNull(event.beta),
+      gamma: finiteOrNull(event.gamma),
+      relativeOnly: true,
+    });
   }
 
   return {
     start() {
-      // Always listen to both (Android absolute + fallback; iOS orientation).
-      window.addEventListener("deviceorientationabsolute", handleOrientation);
+      // Always attach both; Chrome Android needs the absolute event name for north-referenced alpha.
+      window.addEventListener("deviceorientationabsolute", handleAbsolute);
       window.addEventListener("deviceorientation", handleOrientation);
+      console.log(
+        "[COMPASS] listening for deviceorientationabsolute + deviceorientation",
+      );
     },
     stop() {
-      window.removeEventListener("deviceorientationabsolute", handleOrientation);
+      window.removeEventListener("deviceorientationabsolute", handleAbsolute);
       window.removeEventListener("deviceorientation", handleOrientation);
     },
     getReading() {
@@ -126,6 +207,16 @@ export function createCompassTracker(onReading) {
     hasReceivedEvent() {
       return (
         fired.deviceorientationabsolute > 0 || fired.deviceorientation > 0
+      );
+    },
+    hasAbsoluteEvent() {
+      return fired.deviceorientationabsolute > 0;
+    },
+    isRelativeOnly() {
+      return (
+        fired.deviceorientation > 0 &&
+        fired.deviceorientationabsolute === 0 &&
+        cachedReading?.heading == null
       );
     },
     getDebug() {
