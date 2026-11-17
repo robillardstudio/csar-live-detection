@@ -1,13 +1,26 @@
 // Loads Transformers.js pipelines (object-detection or image-classification) and chooses WebGPU or WASM.
+// MediaPipe EfficientDet-Lite0 is a separate engine (see analysis/mediapipe-detect.js).
 // live-detection.js reads the resolved device/dtype via getObjectDetectorBackend().
 import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.2.1";
 import { isPhone } from "./utils/device.js";
+import {
+  disposeMediaPipeObjectDetector,
+  getMediaPipeBackend,
+  loadMediaPipeObjectDetector,
+} from "./analysis/mediapipe-detect.js";
 
 export const MODEL_OPTIONS = [
-  { id: "Xenova/yolos-tiny", label: "YOLOS-tiny (detection)", task: "detection", enabled: true },
-  { id: "Xenova/detr-resnet-50", label: "DETR (detection)", task: "detection", enabled: true },
-  { id: "onnx-community/mobilenetv4_conv_small.e2400_r224_in1k", label: "MobileNet (classification)", task: "classification", enabled: true },
-  { id: "llm:scene-description", label: "LLM — scene description (coming soon)", task: "llm", enabled: false },
+  { id: "Xenova/yolos-tiny", label: "YOLOS-tiny (detection)", task: "detection", engine: "transformers", enabled: true },
+  { id: "Xenova/detr-resnet-50", label: "DETR (detection)", task: "detection", engine: "transformers", enabled: true },
+  {
+    id: "mediapipe:efficientdet-lite0",
+    label: "MediaPipe EfficientDet-Lite0 (detection)",
+    task: "detection",
+    engine: "mediapipe",
+    enabled: true,
+  },
+  { id: "onnx-community/mobilenetv4_conv_small.e2400_r224_in1k", label: "MobileNet (classification)", task: "classification", engine: "transformers", enabled: true },
+  { id: "llm:scene-description", label: "LLM — scene description (coming soon)", task: "llm", engine: null, enabled: false },
 ];
 
 // Phones start on the lighter classifier; desktop and iPad on YOLOS-tiny.
@@ -22,6 +35,12 @@ export function getModelId() {
 
 export function getModelTask() {
   return MODEL_OPTIONS.find((item) => item.id === MODEL_ID)?.task ?? "detection";
+}
+
+export function getModelEngine() {
+  return (
+    MODEL_OPTIONS.find((item) => item.id === MODEL_ID)?.engine ?? "transformers"
+  );
 }
 
 export function getActiveSlot() {
@@ -73,6 +92,9 @@ let resolvedBackendPromise = pickBackend();
 
 // Set DTYPE (not "auto") to force a precision for comparison.
 export async function getObjectDetectorBackend() {
+  if (getModelEngine() === "mediapipe") {
+    return getMediaPipeBackend();
+  }
   const backend = await resolvedBackendPromise;
   return DTYPE === "auto" ? { ...backend } : { ...backend, dtype: DTYPE };
 }
@@ -158,13 +180,20 @@ export async function loadModel(modelName) {
   }
 
   const requestedModel = config.model;
+  const engine = getModelEngine();
 
   setModelStatus(modelName, "loading");
 
   const _tStart = performance.now();
-  console.log(`[TIMING] ${modelName}: loading started (${requestedModel})`);
+  console.log(
+    `[TIMING] ${modelName}: loading started (${requestedModel}, engine=${engine})`,
+  );
 
-  const loadPromise = createPipeline(config.task, requestedModel)
+  const loadPromise = (
+    engine === "mediapipe" && modelName === "objectDetector"
+      ? loadMediaPipeObjectDetector()
+      : createPipeline(config.task, requestedModel)
+  )
     .then((instance) => {
       if (config.model !== requestedModel) {
         return models[modelName];
@@ -205,6 +234,9 @@ export async function setDetectionModel(modelId) {
   }
 
   const previousId = MODEL_ID;
+  const previousEngine =
+    MODEL_OPTIONS.find((item) => item.id === previousId)?.engine ??
+    "transformers";
   const previousDetector = models.objectDetector;
   const previousClassifier = models.classifier;
   MODEL_ID = modelId;
@@ -219,8 +251,7 @@ export async function setDetectionModel(modelId) {
     const next = await loadModel(slot);
     // Free the previous pipelines only after the new one is ready so a mid-session
     // switch can keep recording/labels going without a gap on the new model.
-    disposePipeline(previousDetector);
-    disposePipeline(previousClassifier);
+    disposeLoadedModel(previousDetector, previousClassifier, previousEngine);
     return next;
   } catch (error) {
     MODEL_ID = previousId;
@@ -235,6 +266,15 @@ export async function setDetectionModel(modelId) {
     await loadModel(getActiveSlot()).catch(() => {});
     throw error;
   }
+}
+
+function disposeLoadedModel(detectorInstance, classifierInstance, engine) {
+  if (engine === "mediapipe") {
+    disposeMediaPipeObjectDetector();
+    return;
+  }
+  disposePipeline(detectorInstance);
+  disposePipeline(classifierInstance);
 }
 
 function disposePipeline(pipelineInstance) {

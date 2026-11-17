@@ -1212,11 +1212,24 @@ button:active {
   cursor: pointer;
 }
 
+.still-settings__field {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--color-text-subtle);
+}
+
+.still-settings__field .select {
+  width: 100%;
+}
+
 .still-settings__slider {
   display: grid;
   grid-template-columns: auto 1fr auto;
   gap: 8px;
   align-items: center;
+  margin: 0 0 10px;
   font-size: 12px;
   color: var(--color-text-subtle);
 }

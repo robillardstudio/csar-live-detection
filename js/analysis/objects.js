@@ -1,5 +1,6 @@
 // Runs the object detector from models.js and draws label/confidence boxes on the live feed.
-import { loadModel, getModel } from "../models.js";
+import { getModel, getModelEngine, loadModel } from "../models.js";
+import { detectObjectsWithMediaPipe } from "./mediapipe-detect.js";
 
 const LABEL_COLORS = [
   "#e6194b",
@@ -144,6 +145,11 @@ function boxToPercentages(box, image) {
 
 export async function detectObjectsFromSource(source, options) {
   const { threshold, maxObjects } = options;
+
+  if (getModelEngine() === "mediapipe") {
+    // MediaPipe expects a canvas / video / image element (not Transformers RawImage).
+    return detectObjectsWithMediaPipe(source, { threshold, maxObjects });
+  }
 
   await loadModel("objectDetector");
   const model = getModel("objectDetector");

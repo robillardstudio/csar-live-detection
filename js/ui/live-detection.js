@@ -4,6 +4,7 @@ import { RawImage } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers
 import { requestCameraStream, showCameraFeedback } from "../utils/camera.js";
 import {
   getActiveSlot,
+  getModelEngine,
   getModelId,
   getModelTask,
   getObjectDetectorBackend,
@@ -45,6 +46,7 @@ import {
   initStillSettings,
   setModelPickersDisabled,
   syncModelPickers,
+  syncNoiseSettingsUi,
 } from "./sidebar.js";
 import { initModelsSheet } from "./details-sheet.js";
 import { getSelectedRecordingId } from "./app-mode.js";
@@ -69,25 +71,26 @@ const NO_COMPASS_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="n
 const ROLLING_WINDOW = 30;
 // Cap the longest edge at 640px so full-resolution camera frames don't exhaust memory on mobile Safari.
 const MAX_INFERENCE_EDGE = 640;
-// Hard cap so live analysis never exceeds 2 completed inferences per second.
-const MIN_INFERENCE_INTERVAL_MS = 500;
-const MIN_CONFIDENCE = 0.2;
 const STILL_MOVE_M = 3;
 const HEARTBEAT_MS = 10_000;
 const SPOT_DECIMALS = 4;
 
 // Coarse-pointer devices (iPad etc.) wait ~700ms between completed inferences so memory can release.
-function resolveInferenceIntervalMs() {
+// Desktop stays uncapped unless Analyses/sec is set (MobileNet default 2; detectors default Max).
+function deviceInferenceIntervalMs() {
   const coarsePointer =
     typeof window.matchMedia === "function" &&
     window.matchMedia("(pointer: coarse)").matches;
-  return coarsePointer ? 700 : MIN_INFERENCE_INTERVAL_MS;
+  return coarsePointer ? 700 : 0;
 }
 
-const INFERENCE_INTERVAL_MS = Math.max(
-  MIN_INFERENCE_INTERVAL_MS,
-  resolveInferenceIntervalMs(),
-);
+function inferenceIntervalMsFromSettings() {
+  const rate = Number(getSettings().analysesPerSecond);
+  if (!Number.isFinite(rate) || rate <= 0) {
+    return deviceInferenceIntervalMs();
+  }
+  return Math.max(1000 / rate, deviceInferenceIntervalMs());
+}
 
 function createLiveMetricsTracker() {
   const inferenceTimes = [];
@@ -682,10 +685,11 @@ export function initLiveDetectionPage(annotate = null) {
     if (!running || busy || switchingModel) {
       return;
     }
-    // Throttle from last *completed* inference, not last tick, so a slow frame still gets breathing room.
+    // Throttle from last *completed* inference using per-model Analyses per second.
+    const intervalMs = inferenceIntervalMsFromSettings();
     if (
-      INFERENCE_INTERVAL_MS > 0 &&
-      performance.now() - lastCompletedInferenceAt < INFERENCE_INTERVAL_MS
+      intervalMs > 0 &&
+      performance.now() - lastCompletedInferenceAt < intervalMs
     ) {
       return;
     }
@@ -714,8 +718,8 @@ export function initLiveDetectionPage(annotate = null) {
     // A frame grabbed before the log is cleared is not logged after it.
     const generation = logGeneration;
 
-    const { parameters } = getSettings();
-    const confidenceFloor = Math.max(MIN_CONFIDENCE, parameters.confidence);
+    const { parameters, minConfidence } = getSettings();
+    const confidenceFloor = Number(minConfidence ?? parameters.confidence) || 0.2;
     const madThreshold =
       STILL_SENSITIVITY[parameters.stillSensitivity] ?? STILL_SENSITIVITY.medium;
     const thumb = grabGrayscaleThumbnail(frameCanvas, thumbBuffer);
@@ -780,7 +784,10 @@ export function initLiveDetectionPage(annotate = null) {
         );
         annotate?.setLiveAnnotateState({ orientation, gpsFix: gpsNow });
       } else {
-        const rawDetections = await detectObjectsFromSource(input, {
+        // MediaPipe needs the canvas element; Transformers gets RawImage/data URL.
+        const detectionSource =
+          getModelEngine() === "mediapipe" ? frameCanvas : input;
+        const rawDetections = await detectObjectsFromSource(detectionSource, {
           threshold: confidenceFloor,
           maxObjects: parameters.maxObjects,
         });
@@ -901,7 +908,9 @@ export function initLiveDetectionPage(annotate = null) {
         });
         compass.start();
       });
-      console.log(`[LIVE] INFERENCE_INTERVAL_MS=${INFERENCE_INTERVAL_MS}`);
+      console.log(
+        `[LIVE] analysesPerSecond=${getSettings().analysesPerSecond} intervalMs=${inferenceIntervalMsFromSettings()}`,
+      );
       loop();
     } catch (error) {
       setLiveDetectionActive(false);
@@ -1108,6 +1117,7 @@ export function initLiveDetectionPage(annotate = null) {
         await new Promise((resolve) => requestAnimationFrame(resolve));
       }
       await setDetectionModel(modelId);
+      syncNoiseSettingsUi(modelId);
       backendInfo = await getObjectDetectorBackend();
       setMetric(
         "backend",

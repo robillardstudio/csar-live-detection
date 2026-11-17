@@ -34,13 +34,27 @@
         </section>
 
         <section class="sec">
-          <div class="sec-h"><span class="eyebrow">Still detection</span></div>
+          <div class="sec-h"><span class="eyebrow">Live limits</span></div>
+          <label class="still-settings__field" for="setting-analyses-per-second">
+            <span>Analyses per second</span>
+            <select id="setting-analyses-per-second" class="select" data-noise-rate aria-label="Analyses per second">
+              <option value="0">Max</option>
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="5">5</option>
+              <option value="10">10</option>
+            </select>
+          </label>
+          <label class="still-settings__slider" for="setting-min-confidence">
+            <span>Min confidence <b class="mono" data-noise-confidence-value>0.50</b></span>
+            <input type="range" id="setting-min-confidence" min="0.05" max="0.9" step="0.05" value="0.5" data-noise-confidence>
+          </label>
           <label class="still-settings__check">
-            <input type="checkbox" id="skip-when-still" checked>
+            <input type="checkbox" id="skip-when-still">
             Skip when still
           </label>
           <label class="still-settings__slider" for="still-sensitivity">
-            <span>Sensitivity</span>
+            <span>Still sensitivity</span>
             <input type="range" id="still-sensitivity" min="0" max="2" step="1" value="1">
             <span id="still-sensitivity-label">Medium</span>
           </label>
@@ -333,14 +347,32 @@
         <p class="perf-note" data-perf-note hidden></p>
         <div class="kv"><span>Frames processed</span><b class="mono" data-metric="frames">0</b></div>
         <div class="kv still-settings-block">
+          <label class="still-settings__field" for="setting-analyses-per-second-mobile">
+            <span>Analyses per second</span>
+            <select id="setting-analyses-per-second-mobile" class="select" data-noise-rate aria-label="Analyses per second">
+              <option value="0">Max</option>
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="5">5</option>
+              <option value="10">10</option>
+            </select>
+          </label>
+        </div>
+        <div class="kv">
+          <label class="still-settings__slider" for="setting-min-confidence-mobile">
+            <span>Min confidence <b class="mono" data-noise-confidence-value>0.50</b></span>
+            <input type="range" id="setting-min-confidence-mobile" min="0.05" max="0.9" step="0.05" value="0.5" data-noise-confidence>
+          </label>
+        </div>
+        <div class="kv still-settings-block">
           <label class="still-settings__check">
-            <input type="checkbox" id="skip-when-still-mobile" checked data-still-skip>
+            <input type="checkbox" id="skip-when-still-mobile" data-still-skip>
             Skip when still
           </label>
         </div>
         <div class="kv">
           <label class="still-settings__slider" for="still-sensitivity-mobile">
-            <span>Sensitivity</span>
+            <span>Still sensitivity</span>
             <input type="range" id="still-sensitivity-mobile" min="0" max="2" step="1" value="1" data-still-slider>
             <span id="still-sensitivity-label-mobile" data-still-label>Medium</span>
           </label>
