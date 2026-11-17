@@ -19,6 +19,13 @@ export const MODEL_OPTIONS = [
     engine: "mediapipe",
     enabled: true,
   },
+  {
+    id: "gemini:boxes",
+    label: "Gemini (on demand, boxes)",
+    task: "detection",
+    engine: "gemini",
+    enabled: true,
+  },
   { id: "onnx-community/mobilenetv4_conv_small.e2400_r224_in1k", label: "MobileNet (classification)", task: "classification", engine: "transformers", enabled: true },
   { id: "llm:scene-description", label: "LLM — scene description (coming soon)", task: "llm", engine: null, enabled: false },
 ];
@@ -94,6 +101,9 @@ let resolvedBackendPromise = pickBackend();
 export async function getObjectDetectorBackend() {
   if (getModelEngine() === "mediapipe") {
     return getMediaPipeBackend();
+  }
+  if (getModelEngine() === "gemini") {
+    return { device: "gemini", dtype: "api" };
   }
   const backend = await resolvedBackendPromise;
   return DTYPE === "auto" ? { ...backend } : { ...backend, dtype: DTYPE };
@@ -189,6 +199,12 @@ export async function loadModel(modelName) {
     `[TIMING] ${modelName}: loading started (${requestedModel}, engine=${engine})`,
   );
 
+  if (engine === "gemini" && modelName === "objectDetector") {
+    models.objectDetector = null;
+    setModelStatus("objectDetector", "ready");
+    return null;
+  }
+
   const loadPromise = (
     engine === "mediapipe" && modelName === "objectDetector"
       ? loadMediaPipeObjectDetector()
@@ -229,8 +245,11 @@ export async function setDetectionModel(modelId) {
   }
 
   const slot = option.task === "classification" ? "classifier" : "objectDetector";
-  if (MODEL_ID === modelId && isModelReady(slot)) {
-    return models[slot];
+  if (
+    MODEL_ID === modelId &&
+    (option.engine === "gemini" || isModelReady(slot))
+  ) {
+    return option.engine === "gemini" ? null : models[slot];
   }
 
   const previousId = MODEL_ID;
@@ -248,6 +267,12 @@ export async function setDetectionModel(modelId) {
   delete loadingPromises.classifier;
 
   try {
+    // Gemini Look is on-demand API — no local weights to preload.
+    if (option.engine === "gemini") {
+      disposeLoadedModel(previousDetector, previousClassifier, previousEngine);
+      setModelStatus("objectDetector", "ready");
+      return null;
+    }
     const next = await loadModel(slot);
     // Free the previous pipelines only after the new one is ready so a mid-session
     // switch can keep recording/labels going without a gap on the new model.
@@ -257,13 +282,15 @@ export async function setDetectionModel(modelId) {
     MODEL_ID = previousId;
     models.objectDetector = previousDetector;
     models.classifier = previousClassifier;
-    if (previousDetector) {
+    if (previousDetector || previousEngine === "gemini") {
       setModelStatus("objectDetector", "ready");
     }
     if (previousClassifier) {
       setModelStatus("classifier", "ready");
     }
-    await loadModel(getActiveSlot()).catch(() => {});
+    if (getModelEngine() !== "gemini") {
+      await loadModel(getActiveSlot()).catch(() => {});
+    }
     throw error;
   }
 }

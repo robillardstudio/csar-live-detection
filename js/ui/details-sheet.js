@@ -95,6 +95,9 @@ export function initModelsSheet({ getModels, getSelectedId, onSelect }) {
     '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>';
 
   function modelBlurb(option) {
+    if (option.engine === "gemini") {
+      return "On demand · Look freezes a frame for boxes";
+    }
     if (option.task === "classification") {
       return "Classification · names the whole frame";
     }

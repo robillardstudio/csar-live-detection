@@ -87,8 +87,21 @@ function drawBoundingBoxes(container, results, dimensionSource) {
     const bearing = Number.isFinite(result.bearing)
       ? ` · ${Math.round(result.bearing) % 360}°`
       : "";
-    labelEl.textContent = `${result.label} ${formatObjectScore(result.score)}${bearing}`;
+    const scoreText =
+      result.score == null || Number.isNaN(Number(result.score))
+        ? ""
+        : ` ${formatObjectScore(result.score)}`;
+    labelEl.textContent = `${result.label}${scoreText}${bearing}`;
     labelEl.style.backgroundColor = color;
+
+    boxEl.dataset.label = result.label;
+    boxEl.setAttribute("role", "button");
+    boxEl.tabIndex = 0;
+    boxEl.setAttribute("aria-pressed", "false");
+    if (result.selected) {
+      boxEl.classList.add("bounding-box--selected");
+      boxEl.setAttribute("aria-pressed", "true");
+    }
 
     boxEl.appendChild(labelEl);
     layer.appendChild(boxEl);
@@ -97,7 +110,12 @@ function drawBoundingBoxes(container, results, dimensionSource) {
   container.appendChild(layer);
 }
 
-export function renderBoundingBoxesOnContainer(container, results, dimensionSource) {
+export function renderBoundingBoxesOnContainer(
+  container,
+  results,
+  dimensionSource,
+  { onSelectLabel } = {},
+) {
   const image = dimensionSource ?? container.querySelector("img");
   if (!image) {
     return;
@@ -110,6 +128,34 @@ export function renderBoundingBoxesOnContainer(container, results, dimensionSour
   }
 
   drawBoundingBoxes(container, results, dimensionSource);
+
+  const layer = container.querySelector(".bounding-boxes");
+  if (!layer) {
+    return;
+  }
+  if (typeof onSelectLabel === "function") {
+    layer.classList.add("is-interactive");
+    layer.addEventListener("click", (event) => {
+      const box = event.target.closest(".bounding-box[data-label]");
+      if (!box) {
+        return;
+      }
+      event.preventDefault();
+      onSelectLabel(box.dataset.label);
+    });
+  }
+}
+
+export function setSelectedBoundingBox(container, label) {
+  const layer = container?.querySelector(".bounding-boxes");
+  if (!layer) {
+    return;
+  }
+  for (const box of layer.querySelectorAll(".bounding-box")) {
+    const selected = label != null && box.dataset.label === label;
+    box.classList.toggle("bounding-box--selected", selected);
+    box.setAttribute("aria-pressed", String(selected));
+  }
 }
 
 function boxToPercentages(box, image) {

@@ -659,6 +659,24 @@ button:active {
   background-color: #111111;
 }
 
+.gemini-freeze {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #111;
+  z-index: 1;
+}
+
+.gemini-look-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .live-stage__idle {
   flex: 1;
   display: flex;
@@ -1153,11 +1171,20 @@ button:active {
   pointer-events: none;
 }
 
+.bounding-boxes.is-interactive {
+  pointer-events: auto;
+}
+
 .bounding-box {
   position: absolute;
   box-sizing: border-box;
   border: 2px solid;
   pointer-events: none;
+  cursor: pointer;
+}
+
+.bounding-boxes.is-interactive .bounding-box {
+  pointer-events: auto;
 }
 
 .bounding-box__label {
@@ -1172,6 +1199,12 @@ button:active {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.bounding-box--selected {
+  outline: 2px solid #fff;
+  box-shadow: 0 0 0 2px var(--accent, #3b5bdb);
+  z-index: 2;
 }
 
 .bounding-box--person {

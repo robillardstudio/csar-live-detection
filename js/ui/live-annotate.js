@@ -130,6 +130,7 @@ export function initLiveAnnotate() {
   let selectedLabel = null;
   let pointerOver = false;
   let running = false;
+  let frozen = false;
   let gpsFix = null;
   let orientation = null;
   let backend = null;
@@ -141,6 +142,32 @@ export function initLiveAnnotate() {
   let toastTimer = null;
   let toastRowId = null;
   let undoFn = null;
+  /** @type {null | { label: string, box: object, box2d: number[], frameW: number, frameH: number, timestamp: number, prompt: string|null }} */
+  let frozenSelection = null;
+  let onSelectionChange = null;
+
+  function canAnnotateLive() {
+    return running || frozen;
+  }
+
+  function selectionMeta(label) {
+    if (
+      frozen &&
+      frozenSelection &&
+      frozenSelection.label === label &&
+      frozenSelection.box
+    ) {
+      return {
+        box: frozenSelection.box,
+        box2d: frozenSelection.box2d,
+        frameW: frozenSelection.frameW,
+        frameH: frozenSelection.frameH,
+        timestamp: frozenSelection.timestamp,
+        prompt: frozenSelection.prompt,
+      };
+    }
+    return {};
+  }
 
   function isPinned() {
     return selectedLabel != null || pointerOver;
@@ -165,8 +192,10 @@ export function initLiveAnnotate() {
   }
 
   function syncHint() {
-    hintEl.textContent = running
-      ? ""
+    hintEl.textContent = canAnnotateLive()
+      ? frozen
+        ? "Frozen Look — tap a box or label to Add / Replace / Delete."
+        : ""
       : "Detection is off, so labels you add now are saved without a frame.";
     hintEl.hidden = !hintEl.textContent;
     countEl.textContent = `· ${order.length}`;
@@ -185,11 +214,13 @@ export function initLiveAnnotate() {
 
   function renderChips() {
     chipsEl.replaceChildren();
-    const items = running
+    const items = canAnnotateLive()
       ? suggestions.slice(0, 5).map((item) => [item.label, item.score])
       : order.slice(0, 4).map((entry) => [entry.label, null]);
 
-    chipsLabel.textContent = running ? "Model suggestions" : "Recent labels";
+    chipsLabel.textContent = canAnnotateLive()
+      ? "Model suggestions"
+      : "Recent labels";
 
     for (const [name, score] of items) {
       const chip = document.createElement("button");
@@ -206,7 +237,10 @@ export function initLiveAnnotate() {
   }
 
   function syncFramePreview() {
-    const dataUrl = running && typeof captureFrame === "function" ? captureFrame() : null;
+    const dataUrl =
+      canAnnotateLive() && typeof captureFrame === "function"
+        ? captureFrame()
+        : null;
     thumbEl.classList.toggle("nof", !dataUrl);
     thumbEl.replaceChildren();
     if (dataUrl) {
@@ -350,13 +384,14 @@ export function initLiveAnnotate() {
 
     const actions = document.createElement("div");
     actions.className = "ai-labels__actions";
+    const live = canAnnotateLive();
     actions.innerHTML = `
-      <button type="button" class="a" data-act="addto" ${running ? "" : "disabled"} aria-label="Add current frame to ${entry.label}">Add to</button>
-      <button type="button" class="a" data-act="replace" ${running ? "" : "disabled"} aria-label="Replace ${entry.label}">Replace</button>
+      <button type="button" class="a" data-act="addto" ${live ? "" : "disabled"} aria-label="Add current frame to ${entry.label}">Add to</button>
+      <button type="button" class="a" data-act="replace" ${live ? "" : "disabled"} aria-label="Replace ${entry.label}">Replace</button>
       <button type="button" class="a del" data-act="del" aria-label="Delete ${entry.label}">Delete</button>
     `;
     item.append(actions);
-    if (!running) {
+    if (!live) {
       const note = document.createElement("p");
       note.className = "ai-labels__actions-note";
       note.textContent =
@@ -406,7 +441,7 @@ export function initLiveAnnotate() {
     const selected = selectedLabel;
 
     if (kind === "addto") {
-      if (!running || !selected) {
+      if (!canAnnotateLive() || !selected) {
         return;
       }
       const { refersToLabel, refersToRow } = resolveRef(selected);
@@ -419,6 +454,7 @@ export function initLiveAnnotate() {
         orientation,
         modelId: getModelId(),
         backend,
+        ...selectionMeta(selected),
       });
       const entry = byLabel.get(selected);
       if (entry) {
@@ -447,12 +483,17 @@ export function initLiveAnnotate() {
         orientation,
         modelId: getModelId(),
         backend,
+        ...selectionMeta(selected),
       });
       if (removed && index >= 0) {
         order.splice(index, 1);
         byLabel.delete(selected);
       }
       selectedLabel = null;
+      if (frozen && frozenSelection) {
+        frozenSelection = { ...frozenSelection, label: null };
+      }
+      onSelectionChange?.(null);
       renderList();
       showToast(`Deleted “${removed?.label ?? refersToLabel}”`, () => {
         if (row?.id != null) {
@@ -469,7 +510,7 @@ export function initLiveAnnotate() {
     }
 
     if (kind === "replace") {
-      if (!running || !selected) {
+      if (!canAnnotateLive() || !selected) {
         return;
       }
       const { refersToLabel, refersToRow } = resolveRef(selected);
@@ -482,6 +523,7 @@ export function initLiveAnnotate() {
         orientation,
         modelId: getModelId(),
         backend,
+        ...selectionMeta(selected),
       });
       const entry = byLabel.get(selected);
       if (entry) {
@@ -490,6 +532,10 @@ export function initLiveAnnotate() {
         entry.lastSeen = Date.now();
         byLabel.set(labelText, entry);
         selectedLabel = labelText;
+        if (frozenSelection?.label === selected) {
+          frozenSelection = { ...frozenSelection, label: labelText };
+        }
+        onSelectionChange?.(labelText);
       }
       closeSheet();
       renderList();
@@ -507,6 +553,7 @@ export function initLiveAnnotate() {
       orientation,
       modelId: getModelId(),
       backend,
+      ...selectionMeta(selectedLabel),
     });
     const existing = byLabel.get(labelText);
     if (existing) {
@@ -578,6 +625,19 @@ export function initLiveAnnotate() {
     if ("running" in next) {
       running = Boolean(next.running);
     }
+    if ("frozen" in next) {
+      frozen = Boolean(next.frozen);
+      if (!frozen) {
+        frozenSelection = null;
+      }
+    }
+    if ("frozenFrame" in next && next.frozenFrame) {
+      frozenSelection = {
+        ...(frozenSelection || {}),
+        ...next.frozenFrame,
+        detections: next.frozenFrame.detections ?? frozenSelection?.detections,
+      };
+    }
     if ("gpsFix" in next) {
       gpsFix = next.gpsFix;
     }
@@ -589,6 +649,9 @@ export function initLiveAnnotate() {
     }
     if ("captureFrame" in next) {
       captureFrame = next.captureFrame;
+    }
+    if ("onSelectionChange" in next) {
+      onSelectionChange = next.onSelectionChange;
     }
     if (selectedLabel) {
       renderList();
@@ -602,11 +665,16 @@ export function initLiveAnnotate() {
     order.length = 0;
     pendingNew.length = 0;
     selectedLabel = null;
+    frozenSelection = null;
     suggestions = [];
     listEl.replaceChildren();
     hideToast(true);
     closeSheet();
     syncHint();
+  }
+
+  function showStatusToast(message) {
+    showToast(message);
   }
 
   listEl.addEventListener("pointerenter", () => {
@@ -624,14 +692,14 @@ export function initLiveAnnotate() {
       event.stopPropagation();
       const action = act.dataset.act;
       if (action === "addto") {
-        if (!running || act.disabled) {
+        if (!canAnnotateLive() || act.disabled) {
           return;
         }
         commitAction("addto", selectedLabel);
         return;
       }
       if (action === "replace") {
-        if (!running || act.disabled) {
+        if (!canAnnotateLive() || act.disabled) {
           return;
         }
         openSheet("replace");
@@ -647,10 +715,43 @@ export function initLiveAnnotate() {
     if (!item) {
       return;
     }
-    selectedLabel =
-      selectedLabel === item.dataset.label ? null : item.dataset.label;
-    renderList();
+    selectLabel(
+      selectedLabel === item.dataset.label ? null : item.dataset.label,
+    );
   });
+
+  function selectLabel(label, meta = null) {
+    selectedLabel = label || null;
+    if (meta && selectedLabel) {
+      frozenSelection = {
+        label: selectedLabel,
+        box: meta.box ?? null,
+        box2d: meta.box2d ?? null,
+        frameW: meta.frameW ?? null,
+        frameH: meta.frameH ?? null,
+        timestamp: meta.timestamp ?? Date.now(),
+        prompt: meta.prompt ?? null,
+      };
+    } else if (!selectedLabel) {
+      if (frozenSelection) {
+        frozenSelection = { ...frozenSelection, label: null };
+      }
+    } else if (frozenSelection?.detections) {
+      const hit = frozenSelection.detections.find(
+        (item) => item.label === selectedLabel,
+      );
+      if (hit) {
+        frozenSelection = {
+          ...frozenSelection,
+          label: selectedLabel,
+          box: hit.box,
+          box2d: hit.box2d,
+        };
+      }
+    }
+    onSelectionChange?.(selectedLabel);
+    renderList();
+  }
 
   listEl.addEventListener("keydown", (event) => {
     if (
@@ -726,6 +827,8 @@ export function initLiveAnnotate() {
     noteLiveLabels,
     setLiveAnnotateState,
     setSuggestions,
+    selectLabel,
+    showStatusToast,
     resetLabels,
     getLabelCount: () => order.length,
   };

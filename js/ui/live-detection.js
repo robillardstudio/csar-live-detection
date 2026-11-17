@@ -13,6 +13,12 @@ import {
   setDetectionModel,
   setLiveDetectionActive,
 } from "../models.js";
+import { detectBoxesInImage } from "../live/gemini-client.js";
+import {
+  BOXES_PROMPT,
+  getGeminiModelId,
+  hasGeminiApiKey,
+} from "../live/gemini-settings.js";
 import { createGpsTracker } from "../utils/geolocation.js";
 import { createCompassTracker, requestCompassPermission } from "../utils/compass.js";
 import { objectBearing } from "../utils/bearing.js";
@@ -38,13 +44,17 @@ import {
 import {
   detectObjectsFromSource,
   renderBoundingBoxesOnContainer,
+  setSelectedBoundingBox,
 } from "../analysis/objects.js";
 import { classifyImageFromSource } from "../analysis/classify.js";
 import {
+  getGeminiAutoLookSeconds,
   getSettings,
+  initGeminiSettings,
   initModelPicker,
   initStillSettings,
   setModelPickersDisabled,
+  syncGeminiSettingsVisibility,
   syncModelPickers,
   syncNoiseSettingsUi,
 } from "./sidebar.js";
@@ -269,6 +279,27 @@ export function initLiveDetectionPage(annotate = null) {
   let running = false;
   let busy = false;
   let switchingModel = false;
+  let frozenLook = false;
+  let looking = false;
+  let lookDetections = [];
+  let lookPrompt = null;
+  let lookTimestamp = 0;
+  let autoLookTimerId = null;
+  const freezeCanvas = document.getElementById("gemini-freeze");
+  const lookButtons = [
+    document.getElementById("btn-gemini-look"),
+    document.getElementById("btn-gemini-look-sidebar"),
+    document.getElementById("btn-gemini-look-mobile"),
+  ].filter(Boolean);
+  const resumeButtons = [
+    document.getElementById("btn-gemini-resume"),
+    document.getElementById("btn-gemini-resume-sidebar"),
+    document.getElementById("btn-gemini-resume-mobile"),
+  ].filter(Boolean);
+  const lookStatusNodes = [
+    document.getElementById("gemini-look-status"),
+    document.getElementById("gemini-look-status-mobile"),
+  ].filter(Boolean);
   let isRecording = false;
   let recordArmed = false;
   let animationFrameId = null;
@@ -500,7 +531,22 @@ export function initLiveDetectionPage(annotate = null) {
   }
 
   function captureFrame() {
-    if (!running || !video.videoWidth || !video.videoHeight) {
+    if (!running) {
+      return null;
+    }
+    if (frozenLook && freezeCanvas && !freezeCanvas.hidden) {
+      const w = 112;
+      const h = Math.max(
+        1,
+        Math.round((freezeCanvas.height / Math.max(1, freezeCanvas.width)) * w),
+      );
+      captureCanvas.width = w;
+      captureCanvas.height = h;
+      const ctx = captureCanvas.getContext("2d");
+      ctx.drawImage(freezeCanvas, 0, 0, w, h);
+      return captureCanvas.toDataURL("image/jpeg", 0.7);
+    }
+    if (!video.videoWidth || !video.videoHeight) {
       return null;
     }
     const w = 112;
@@ -510,6 +556,210 @@ export function initLiveDetectionPage(annotate = null) {
     const ctx = captureCanvas.getContext("2d");
     ctx.drawImage(video, 0, 0, w, h);
     return captureCanvas.toDataURL("image/jpeg", 0.7);
+  }
+
+  function setLookingUi(isLooking) {
+    looking = isLooking;
+    for (const node of lookStatusNodes) {
+      node.hidden = !isLooking;
+    }
+    for (const button of lookButtons) {
+      button.disabled = isLooking || !running || !isGeminiBoxes();
+      button.textContent = isLooking ? "Looking…" : "Look";
+    }
+  }
+
+  function syncLookControls() {
+    const gemini = isGeminiBoxes();
+    syncGeminiSettingsVisibility();
+    for (const button of lookButtons) {
+      button.hidden = !gemini || !running || frozenLook;
+      button.classList.toggle("hidden", button.hidden);
+      button.disabled = looking || !running || !gemini;
+    }
+    for (const button of resumeButtons) {
+      button.hidden = !gemini || !frozenLook;
+      button.classList.toggle("hidden", button.hidden);
+      button.disabled = looking;
+    }
+    for (const node of lookStatusNodes) {
+      node.hidden = !looking;
+    }
+  }
+
+  function clearAutoLookTimer() {
+    if (autoLookTimerId != null) {
+      window.clearInterval(autoLookTimerId);
+      autoLookTimerId = null;
+    }
+  }
+
+  function scheduleAutoLook() {
+    clearAutoLookTimer();
+    const seconds = getGeminiAutoLookSeconds();
+    if (!running || !isGeminiBoxes() || frozenLook || looking || seconds <= 0) {
+      return;
+    }
+    autoLookTimerId = window.setInterval(() => {
+      if (!running || !isGeminiBoxes() || frozenLook || looking) {
+        return;
+      }
+      void runGeminiLook();
+    }, seconds * 1000);
+  }
+
+  function resumeFromLook() {
+    frozenLook = false;
+    lookDetections = [];
+    lookPrompt = null;
+    lookTimestamp = 0;
+    if (freezeCanvas) {
+      freezeCanvas.hidden = true;
+    }
+    mediaWrap.querySelector(".bounding-boxes")?.remove();
+    if (video.srcObject && video.paused) {
+      void video.play().catch(() => {});
+    }
+    annotate?.setLiveAnnotateState({ frozen: false });
+    annotate?.selectLabel?.(null);
+    setLookingUi(false);
+    syncLookControls();
+    scheduleAutoLook();
+  }
+
+  async function runGeminiLook() {
+    if (!running || looking || !isGeminiBoxes()) {
+      return;
+    }
+    if (!hasGeminiApiKey()) {
+      annotate?.showStatusToast?.(
+        "missing_api_key — add a Gemini API key in settings",
+      );
+      return;
+    }
+    if (!video.videoWidth || !video.videoHeight) {
+      annotate?.showStatusToast?.("no_frame — camera is not ready");
+      return;
+    }
+
+    clearAutoLookTimer();
+    setLookingUi(true);
+
+    const width = video.videoWidth;
+    const height = video.videoHeight;
+    if (!freezeCanvas) {
+      setLookingUi(false);
+      return;
+    }
+    freezeCanvas.width = width;
+    freezeCanvas.height = height;
+    const ctx = freezeCanvas.getContext("2d");
+    ctx.drawImage(video, 0, 0, width, height);
+    freezeCanvas.hidden = false;
+    video.pause();
+    frozenLook = true;
+    lookTimestamp = Date.now();
+    annotate?.setLiveAnnotateState({ frozen: true });
+    syncLookControls();
+
+    const jpeg = await new Promise((resolve) => {
+      freezeCanvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.85);
+    });
+
+    const t0 = performance.now();
+    try {
+      const result = await detectBoxesInImage({
+        image: jpeg,
+        prompt: BOXES_PROMPT,
+      });
+      const inferenceMs = performance.now() - t0;
+      lookPrompt = result.prompt;
+      const detections = (result.items || [])
+        .slice(0, 15)
+        .map((item) => {
+          const box2d = item.box_2d;
+          if (!Array.isArray(box2d) || box2d.length < 4) {
+            return null;
+          }
+          const label = String(item.label ?? "").trim();
+          if (!label) {
+            return null;
+          }
+          return {
+            label,
+            score: null,
+            box: box2dToPixels(box2d, width, height),
+            box2d,
+            prompt: lookPrompt,
+          };
+        })
+        .filter(Boolean);
+
+      lookDetections = detections;
+      frameW = width;
+      frameH = height;
+
+      renderBoundingBoxesOnContainer(mediaWrap, detections, freezeCanvas, {
+        onSelectLabel: (label) => {
+          const hit = lookDetections.find((item) => item.label === label);
+          annotate?.selectLabel?.(label, hit
+            ? {
+                box: hit.box,
+                box2d: hit.box2d,
+                frameW: width,
+                frameH: height,
+                timestamp: lookTimestamp,
+                prompt: lookPrompt,
+              }
+            : null);
+          setSelectedBoundingBox(mediaWrap, label);
+        },
+      });
+
+      const logged = logDetectionFrame({
+        detections,
+        frameW: width,
+        frameH: height,
+        inferenceMs,
+        timestamp: lookTimestamp,
+        gpsFix,
+        orientation: compass?.getReading() ?? null,
+        backend: backendInfo ?? { device: "gemini", dtype: "api" },
+        modelId: geminiModelLogId(),
+        prompt: lookPrompt,
+        forceLog: true,
+      });
+
+      annotate?.noteLiveLabels(
+        detections.map((item, index) => ({
+          label: item.label,
+          rowId: logged[index]?.id ?? null,
+        })),
+      );
+      annotate?.setSuggestions(
+        detections.map((item) => ({ label: item.label, score: null })),
+      );
+      annotate?.setLiveAnnotateState({
+        frozen: true,
+        frozenFrame: {
+          detections,
+          frameW: width,
+          frameH: height,
+          timestamp: lookTimestamp,
+          prompt: lookPrompt,
+        },
+        captureFrame,
+      });
+      metrics.recordInferenceMs(inferenceMs);
+      updateMetricsPanel();
+    } catch (error) {
+      const message = error?.message || "look_failed";
+      annotate?.showStatusToast?.(`${message}`);
+      console.error("[GEMINI] look failed:", message);
+    } finally {
+      setLookingUi(false);
+      syncLookControls();
+    }
   }
 
   function renderClassificationReadout(predictions) {
@@ -628,6 +878,7 @@ export function initLiveDetectionPage(annotate = null) {
     if (liveStop) {
       liveStop.disabled = switchingModel || !running;
     }
+    syncLookControls();
 
     clearButton.disabled = getRecordings().length === 0;
     syncRecordSwitches();
@@ -653,6 +904,10 @@ export function initLiveDetectionPage(annotate = null) {
   function stopLiveDetection() {
     running = false;
     busy = false;
+    clearAutoLookTimer();
+    if (frozenLook) {
+      resumeFromLook();
+    }
     if (isRecording) {
       stopRecording();
     }
@@ -674,15 +929,35 @@ export function initLiveDetectionPage(annotate = null) {
     updateMetricsPanel();
     annotate?.setLiveAnnotateState({
       running: false,
+      frozen: false,
       orientation: null,
       gpsFix,
     });
     setStillPaused(false);
   }
 
+  function isGeminiBoxes() {
+    return getModelEngine() === "gemini";
+  }
+
+  function geminiModelLogId() {
+    return `gemini:${getGeminiModelId()}`;
+  }
+
+  function box2dToPixels(box2d, width, height) {
+    const [ymin, xmin, ymax, xmax] = box2d.map(Number);
+    return {
+      xmin: (xmin / 1000) * width,
+      ymin: (ymin / 1000) * height,
+      xmax: (xmax / 1000) * width,
+      ymax: (ymax / 1000) * height,
+    };
+  }
+
   async function tick() {
     // Single-in-flight: never start a new inference while one is running, so frames cannot pile up.
-    if (!running || busy || switchingModel) {
+    // Gemini Look is on-demand — skip the per-frame loop while frozen or when that model is selected.
+    if (!running || busy || switchingModel || frozenLook || isGeminiBoxes()) {
       return;
     }
     // Throttle from last *completed* inference using per-model Analyses per second.
@@ -911,6 +1186,8 @@ export function initLiveDetectionPage(annotate = null) {
       console.log(
         `[LIVE] analysesPerSecond=${getSettings().analysesPerSecond} intervalMs=${inferenceIntervalMsFromSettings()}`,
       );
+      syncLookControls();
+      scheduleAutoLook();
       loop();
     } catch (error) {
       setLiveDetectionActive(false);
@@ -1116,8 +1393,12 @@ export function initLiveDetectionPage(annotate = null) {
       while (busy) {
         await new Promise((resolve) => requestAnimationFrame(resolve));
       }
+      if (frozenLook) {
+        resumeFromLook();
+      }
       await setDetectionModel(modelId);
       syncNoiseSettingsUi(modelId);
+      syncGeminiSettingsVisibility(modelId);
       backendInfo = await getObjectDetectorBackend();
       setMetric(
         "backend",
@@ -1130,6 +1411,7 @@ export function initLiveDetectionPage(annotate = null) {
       if (wasRunning) {
         showCameraFeedback(`Switched to ${friendlyModelLabel(modelId)}`);
       }
+      scheduleAutoLook();
     } catch (error) {
       console.error("[LIVE] model switch failed:", error);
       showCameraFeedback("Could not load that model");
@@ -1153,10 +1435,29 @@ export function initLiveDetectionPage(annotate = null) {
     },
   });
   initStillSettings();
+  initGeminiSettings();
+  for (const button of lookButtons) {
+    button.addEventListener("click", () => {
+      void runGeminiLook();
+    });
+  }
+  for (const button of resumeButtons) {
+    button.addEventListener("click", resumeFromLook);
+  }
+  for (const select of document.querySelectorAll(
+    "#setting-gemini-auto-look, #setting-gemini-auto-look-mobile",
+  )) {
+    select.addEventListener("change", () => scheduleAutoLook());
+  }
   ensureGps();
   setHeading(formatHeading(null), false);
-  annotate?.setLiveAnnotateState({ captureFrame, gpsFix });
+  annotate?.setLiveAnnotateState({
+    captureFrame,
+    gpsFix,
+    onSelectionChange: (label) => setSelectedBoundingBox(mediaWrap, label),
+  });
   updateControls();
   updateMetricsPanel();
+  syncGeminiSettingsVisibility();
   uiTimerId = window.setInterval(tickUiClocks, 1000);
 }

@@ -130,6 +130,11 @@ export function logUserAction({
   orientation = null,
   modelId = null,
   backend = null,
+  box = null,
+  box2d = null,
+  frameW = null,
+  frameH = null,
+  prompt = null,
 }) {
   if (action !== "add" && action !== "replace" && action !== "delete") {
     return null;
@@ -139,6 +144,7 @@ export function logUserAction({
     return null;
   }
 
+  const hasBox = box != null;
   sessionStart ??= timestamp;
   return appendUserRow({
     id: nextRowId++,
@@ -166,11 +172,21 @@ export function logUserAction({
     label: action === "delete" ? "" : trimmed,
     confidence: null,
     rank: null,
-    bbox: null,
-    bbox_norm: null,
-    frame_w: null,
-    frame_h: null,
+    bbox: hasBox
+      ? {
+          xmin: box.xmin,
+          ymin: box.ymin,
+          xmax: box.xmax,
+          ymax: box.ymax,
+        }
+      : null,
+    bbox_norm:
+      hasBox && frameW && frameH ? normalizeBbox(box, frameW, frameH) : null,
+    box_2d: Array.isArray(box2d) ? box2d : null,
+    frame_w: frameW,
+    frame_h: frameH,
     inference_ms: null,
+    prompt: prompt ?? null,
     source: "user",
     action,
     refers_to_label: refersToLabel,
@@ -252,12 +268,16 @@ export function logDetectionFrame({
   orientation,
   backend,
   modelId,
+  prompt = null,
+  forceLog = false,
 }) {
   if (detections.length > 0) {
     sessionStart ??= timestamp;
-    if (activeRecording) {
-      activeRecording.row_count += detections.length;
-      exportedIds.delete(activeRecording.recording_id);
+    if (activeRecording || forceLog) {
+      if (activeRecording) {
+        activeRecording.row_count += detections.length;
+        exportedIds.delete(activeRecording.recording_id);
+      }
     }
   }
   const logged = [];
@@ -286,8 +306,8 @@ export function logDetectionFrame({
       screen_angle: orientation?.screenAngle ?? null,
       screen_orientation_type: orientation?.screenOrientationType ?? null,
       model: modelId,
-      dtype: backend.dtype,
-      device: backend.device,
+      dtype: backend?.dtype ?? null,
+      device: backend?.device ?? null,
       label: detection.label,
       confidence: detection.score,
       rank: detection.rank ?? null,
@@ -302,9 +322,11 @@ export function logDetectionFrame({
       bbox_norm: hasBox
         ? normalizeBbox(detection.box, frameW, frameH)
         : null,
+      box_2d: Array.isArray(detection.box2d) ? detection.box2d : null,
       frame_w: frameW,
       frame_h: frameH,
       inference_ms: inferenceMs,
+      prompt: prompt ?? detection.prompt ?? null,
       source: "ai",
       action: null,
       refers_to_label: null,

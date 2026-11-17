@@ -20,6 +20,8 @@
     </div>
     <nav class="top-nav__actions" aria-label="Controls">
       <button type="button" id="btn-record" class="btn btn--outline desktop-only" aria-pressed="false" data-show-in="live"><span class="recdot" aria-hidden="true"></span>Start Recording</button>
+      <button type="button" id="btn-gemini-look" class="btn btn--outline desktop-only hidden" data-show-in="live" hidden>Look</button>
+      <button type="button" id="btn-gemini-resume" class="btn btn--outline desktop-only hidden" data-show-in="live" hidden>Resume</button>
       <button type="button" id="btn-live-toggle" class="btn btn--primary desktop-only" aria-pressed="false" data-show-in="live">Start Live Detection</button>
       <button type="button" id="btn-clear-recordings" class="btn btn--quiet hidden" data-show-in="review" disabled>Clear recordings</button>
     </nav>
@@ -31,6 +33,33 @@
         <section class="sec">
           <div class="sec-h"><span class="eyebrow">Model</span></div>
           <select id="model-picker" class="model-picker select" aria-label="Model" data-model-picker></select>
+        </section>
+
+        <section class="sec" id="gemini-settings-desktop" hidden>
+          <div class="sec-h"><span class="eyebrow">Gemini</span></div>
+          <label class="still-settings__field" for="setting-gemini-api-key">
+            <span>API key</span>
+            <input type="password" id="setting-gemini-api-key" class="select" autocomplete="off" spellcheck="false" placeholder="Stored on this device only">
+          </label>
+          <label class="still-settings__field" for="setting-gemini-model">
+            <span>Model</span>
+            <select id="setting-gemini-model" class="select" hidden aria-label="Gemini model"></select>
+            <input type="text" id="setting-gemini-model-fallback" class="select" autocomplete="off" spellcheck="false" placeholder="e.g. gemini-2.0-flash">
+          </label>
+          <label class="still-settings__field" for="setting-gemini-auto-look">
+            <span>Auto-look every</span>
+            <select id="setting-gemini-auto-look" class="select" aria-label="Auto-look interval">
+              <option value="0" selected>Off</option>
+              <option value="5">5 s</option>
+              <option value="10">10 s</option>
+              <option value="20">20 s</option>
+            </select>
+          </label>
+          <div class="gemini-look-row">
+            <button type="button" id="btn-gemini-look-sidebar" class="btn btn--outline" hidden>Look</button>
+            <button type="button" id="btn-gemini-resume-sidebar" class="btn btn--outline" hidden>Resume</button>
+            <span id="gemini-look-status" class="muted" hidden>Looking…</span>
+          </div>
         </section>
 
         <section class="sec">
@@ -145,6 +174,11 @@
                 </div>
                 <button type="button" id="btn-record-live" class="switch" role="switch" aria-checked="false" aria-label="Record session"></button>
               </div>
+              <div class="gemini-look-row mobile-only" id="gemini-look-mobile" hidden>
+                <button type="button" id="btn-gemini-look-mobile" class="btn btn-primary">Look</button>
+                <button type="button" id="btn-gemini-resume-mobile" class="btn btn-stop" hidden>Resume</button>
+                <span id="gemini-look-status-mobile" class="muted" hidden>Looking…</span>
+              </div>
               <button type="button" id="btn-live-stop" class="btn btn-stop">Stop detection</button>
             </div>
           </section>
@@ -185,6 +219,7 @@
             <div id="live-feed" class="live-stage__feed" hidden>
               <div class="live-stage__media">
                 <video id="live-video" class="live-stage__video" autoplay playsinline muted></video>
+                <canvas id="gemini-freeze" class="gemini-freeze" hidden aria-hidden="true"></canvas>
                 <ol id="class-readout" class="class-readout" hidden></ol>
               </div>
             </div>
@@ -334,6 +369,26 @@
       <div class="group">
         <div class="kv"><span>Model</span><b id="details-model-name">—</b></div>
         <div class="kv"><span>Backend</span><b class="mono" data-metric="backend">—</b></div>
+        <div id="gemini-settings-mobile" hidden>
+          <label class="still-settings__field" for="setting-gemini-api-key-mobile">
+            <span>Gemini API key</span>
+            <input type="password" id="setting-gemini-api-key-mobile" class="select" autocomplete="off" spellcheck="false" placeholder="Stored on this device only" data-gemini-key>
+          </label>
+          <label class="still-settings__field" for="setting-gemini-model-mobile">
+            <span>Gemini model</span>
+            <select id="setting-gemini-model-mobile" class="select" hidden aria-label="Gemini model" data-gemini-model></select>
+            <input type="text" id="setting-gemini-model-fallback-mobile" class="select" autocomplete="off" spellcheck="false" placeholder="e.g. gemini-2.0-flash" data-gemini-model-fallback>
+          </label>
+          <label class="still-settings__field" for="setting-gemini-auto-look-mobile">
+            <span>Auto-look every</span>
+            <select id="setting-gemini-auto-look-mobile" class="select" aria-label="Auto-look interval" data-gemini-auto-look>
+              <option value="0" selected>Off</option>
+              <option value="5">5 s</option>
+              <option value="10">10 s</option>
+              <option value="20">20 s</option>
+            </select>
+          </label>
+        </div>
       </div>
 
       <div class="eyebrow group-label">Performance</div>
