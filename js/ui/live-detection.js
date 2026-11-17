@@ -150,8 +150,17 @@ function formatGpsAccuracy(fix) {
   return fix?.accuracy == null ? "—" : `±${Math.round(fix.accuracy)}m`;
 }
 
+function formatDebugLine(reading, compassTracker = null) {
+  const debug = reading?.debug || compassTracker?.getDebug?.() || null;
+  if (!debug) {
+    return "debug: (none yet)";
+  }
+  return `debug: ${debug.events || "events?"} · type=${debug.type ?? "—"} · alpha=${debug.alpha ?? "—"} · absolute=${debug.absolute ?? "—"}`;
+}
+
 // TEMPORARY field-test display: corrected camera heading, plus the raw inputs it came from.
-function formatHeading(reading, status = null) {
+function formatHeading(reading, status = null, compassTracker = null) {
+  const debugLine = formatDebugLine(reading, compassTracker);
   if (reading?.heading != null) {
     const degrees = (value) => `${Math.round(value) % 360}°`;
     const camera =
@@ -162,7 +171,7 @@ function formatHeading(reading, status = null) {
       reading.screenAngle == null ? "—" : `${reading.screenAngle}°`;
     return {
       main: `${camera}${accuracy}`,
-      detail: `raw ${degrees(reading.heading)}, screen ${screenAngle}`,
+      detail: `raw ${degrees(reading.heading)}, screen ${screenAngle}\n${debugLine}`,
       available: true,
     };
   }
@@ -171,12 +180,10 @@ function formatHeading(reading, status = null) {
       ? "Permission denied"
       : status === "unavailable"
         ? "Not supported"
-        : reading?.receivedEvent || status === "no-events"
-          ? "No sensor events"
-          : status === "waiting"
-            ? "Waiting for compass…"
-            : "No sensor events";
-  return { main: reason, detail: "", available: false };
+        : status === "waiting"
+          ? "Waiting for compass…"
+          : "No sensor events";
+  return { main: reason, detail: debugLine, available: false };
 }
 
 function computeInferenceSize(videoW, videoH) {
@@ -938,7 +945,7 @@ export function initLiveDetectionPage(annotate = null) {
     mediaWrap.querySelector(".bounding-boxes")?.remove();
     renderClassificationReadout(null);
     annotate?.setSuggestions([]);
-    setHeading(formatHeading(null, "unavailable"));
+    setHeading(formatHeading(null, "waiting"));
     updateControls();
     updateMetricsPanel();
     annotate?.setLiveAnnotateState({
@@ -1144,21 +1151,19 @@ export function initLiveDetectionPage(annotate = null) {
     }
     setHeading(formatHeading(null, "waiting"));
     compass = createCompassTracker((reading) => {
-      setHeading(formatHeading(reading));
+      setHeading(formatHeading(reading, null, compass));
       annotate?.setLiveAnnotateState({ orientation: reading });
     });
     compass.start();
-    // If nothing arrives, surface that instead of a permanent "none".
+    // Only "No sensor events" after 3s with no absolute/orientation callbacks.
     window.setTimeout(() => {
       if (!running || !compass || compass.getReading()?.heading != null) {
         return;
       }
-      if (!compass.hasReceivedEvent()) {
-        setHeading(formatHeading(null, "no-events"));
-      } else {
-        setHeading(formatHeading(compass.getReading(), "no-events"));
-      }
-    }, 2500);
+      setHeading(
+        formatHeading(compass.getReading(), "no-events", compass),
+      );
+    }, 3000);
   }
 
   async function startLiveDetection() {
@@ -1211,17 +1216,21 @@ export function initLiveDetectionPage(annotate = null) {
         backend: backendInfo,
         captureFrame,
       });
-      // Await after running=true so Android's immediate "granted" doesn't race past startup.
+      // Await after running=true (Android resolves immediately; must not race before running).
       const compassState = await compassPermission;
       if (!running) {
         return;
       }
-      if (compassState === "granted") {
-        startCompassTracker();
-      } else if (compassState === "denied") {
+      if (compassState === "denied") {
         setHeading(formatHeading(null, "denied"));
-      } else {
+      } else if (
+        compassState === "unavailable" &&
+        typeof window.DeviceOrientationEvent === "undefined"
+      ) {
+        // Truly missing API only — missing requestPermission is normal on Android.
         setHeading(formatHeading(null, "unavailable"));
+      } else {
+        startCompassTracker();
       }
       console.log(
         `[LIVE] analysesPerSecond=${getSettings().analysesPerSecond} intervalMs=${inferenceIntervalMsFromSettings()}`,
@@ -1490,7 +1499,7 @@ export function initLiveDetectionPage(annotate = null) {
     select.addEventListener("change", () => scheduleAutoLook());
   }
   ensureGps();
-  setHeading(formatHeading(null, "unavailable"));
+  setHeading(formatHeading(null, "waiting"));
   annotate?.setLiveAnnotateState({
     captureFrame,
     gpsFix,
