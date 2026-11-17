@@ -48,31 +48,32 @@ function toCameraHeading(heading, screenAngle) {
   );
 }
 
+function headingFromEvent(event) {
+  let heading = null;
+  let accuracy = null;
+  // Only iOS reports compass accuracy; elsewhere a missing accuracy just means "not reported".
+  const accuracySupported = Number.isFinite(event.webkitCompassHeading);
+  if (accuracySupported) {
+    heading = normalizeDegrees(event.webkitCompassHeading);
+    // iOS reports a negative accuracy when the compass is uncalibrated.
+    accuracy =
+      event.webkitCompassAccuracy >= 0 ? event.webkitCompassAccuracy : null;
+  } else if (
+    (event.type === "deviceorientationabsolute" || event.absolute === true) &&
+    Number.isFinite(event.alpha)
+  ) {
+    heading = normalizeDegrees(360 - event.alpha);
+  }
+  return { heading, accuracy, accuracySupported };
+}
+
 export function createCompassTracker(onReading) {
   let cachedReading = null;
-  // Plain "deviceorientation" alpha is relative on Android, so prefer the absolute event where it exists.
-  const eventName =
-    "ondeviceorientationabsolute" in window
-      ? "deviceorientationabsolute"
-      : "deviceorientation";
+  let receivedEvent = false;
 
   function handleOrientation(event) {
-    let heading = null;
-    let accuracy = null;
-    // Only iOS reports compass accuracy; elsewhere a missing accuracy just means "not reported".
-    const accuracySupported = Number.isFinite(event.webkitCompassHeading);
-    if (accuracySupported) {
-      heading = normalizeDegrees(event.webkitCompassHeading);
-      // iOS reports a negative accuracy when the compass is uncalibrated.
-      accuracy =
-        event.webkitCompassAccuracy >= 0 ? event.webkitCompassAccuracy : null;
-    } else if (
-      (eventName === "deviceorientationabsolute" || event.absolute) &&
-      Number.isFinite(event.alpha)
-    ) {
-      heading = normalizeDegrees(360 - event.alpha);
-    }
-
+    receivedEvent = true;
+    const { heading, accuracy, accuracySupported } = headingFromEvent(event);
     const screenAngle = readScreenAngle();
     cachedReading = {
       heading,
@@ -83,19 +84,27 @@ export function createCompassTracker(onReading) {
       gamma: finiteOrNull(event.gamma),
       screenAngle,
       screenOrientationType: readScreenOrientationType(),
+      receivedEvent: true,
     };
     onReading?.(cachedReading);
   }
 
   return {
     start() {
-      window.addEventListener(eventName, handleOrientation);
+      // Android: prefer absolute; also listen to plain deviceorientation (absolute=true).
+      // iOS: deviceorientation delivers webkitCompassHeading after permission.
+      window.addEventListener("deviceorientationabsolute", handleOrientation);
+      window.addEventListener("deviceorientation", handleOrientation);
     },
     stop() {
-      window.removeEventListener(eventName, handleOrientation);
+      window.removeEventListener("deviceorientationabsolute", handleOrientation);
+      window.removeEventListener("deviceorientation", handleOrientation);
     },
     getReading() {
       return cachedReading;
+    },
+    hasReceivedEvent() {
+      return receivedEvent;
     },
   };
 }

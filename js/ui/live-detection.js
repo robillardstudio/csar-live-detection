@@ -151,21 +151,32 @@ function formatGpsAccuracy(fix) {
 }
 
 // TEMPORARY field-test display: corrected camera heading, plus the raw inputs it came from.
-function formatHeading(reading) {
-  if (reading?.heading == null) {
-    return { main: "No compass", detail: "" };
+function formatHeading(reading, status = null) {
+  if (reading?.heading != null) {
+    const degrees = (value) => `${Math.round(value) % 360}°`;
+    const camera =
+      reading.cameraHeading == null ? "—" : degrees(reading.cameraHeading);
+    const accuracy =
+      reading.accuracy == null ? "" : ` (±${Math.round(reading.accuracy)}°)`;
+    const screenAngle =
+      reading.screenAngle == null ? "—" : `${reading.screenAngle}°`;
+    return {
+      main: `${camera}${accuracy}`,
+      detail: `raw ${degrees(reading.heading)}, screen ${screenAngle}`,
+      available: true,
+    };
   }
-  const degrees = (value) => `${Math.round(value) % 360}°`;
-  const camera =
-    reading.cameraHeading == null ? "—" : degrees(reading.cameraHeading);
-  const accuracy =
-    reading.accuracy == null ? "" : ` (±${Math.round(reading.accuracy)}°)`;
-  const screenAngle =
-    reading.screenAngle == null ? "—" : `${reading.screenAngle}°`;
-  return {
-    main: `${camera}${accuracy}`,
-    detail: `raw ${degrees(reading.heading)}, screen ${screenAngle}`,
-  };
+  const reason =
+    status === "denied"
+      ? "Permission denied"
+      : status === "unavailable"
+        ? "Not supported"
+        : reading?.receivedEvent || status === "no-events"
+          ? "No sensor events"
+          : status === "waiting"
+            ? "Waiting for compass…"
+            : "No sensor events";
+  return { main: reason, detail: "", available: false };
 }
 
 function computeInferenceSize(videoW, videoH) {
@@ -430,26 +441,29 @@ export function initLiveDetectionPage(annotate = null) {
     }
   }
 
-  function setHeading({ main, detail }, available = false) {
+  function setHeading(formatted) {
+    const main = formatted?.main ?? "No sensor events";
+    const detail = formatted?.detail ?? "";
+    const available = Boolean(formatted?.available);
     const text = `${main}\n${detail}`;
     if (text === headingText && available === hasCompass) {
       return;
     }
     headingText = text;
     hasCompass = available;
-    // Desktop sidebar keeps plain text; mobile metric strip can show a warn state.
-    setMetric("heading", available ? main : "No compass");
+    // Desktop sidebar + mobile strip show degrees or a concrete reason (not a blank "none").
+    setMetric("heading", main);
     if (headingMetric) {
       if (available) {
         headingMetric.classList.remove("warn");
         headingMetric.innerHTML = `<span class="mono">${main}</span>`;
       } else {
         headingMetric.classList.add("warn");
-        headingMetric.innerHTML = `${NO_COMPASS_ICON} <span>None</span>`;
+        headingMetric.innerHTML = `${NO_COMPASS_ICON} <span>${main}</span>`;
       }
     }
     setMetric("heading-main", available ? main : "—");
-    setMetric("heading-detail", detail);
+    setMetric("heading-detail", detail || main);
     detailsHeadingOk?.toggleAttribute("hidden", !available);
     detailsHeadingWarn?.toggleAttribute("hidden", available);
   }
@@ -924,7 +938,7 @@ export function initLiveDetectionPage(annotate = null) {
     mediaWrap.querySelector(".bounding-boxes")?.remove();
     renderClassificationReadout(null);
     annotate?.setSuggestions([]);
-    setHeading(formatHeading(null), false);
+    setHeading(formatHeading(null, "unavailable"));
     updateControls();
     updateMetricsPanel();
     annotate?.setLiveAnnotateState({
@@ -1124,10 +1138,34 @@ export function initLiveDetectionPage(annotate = null) {
     animationFrameId = requestAnimationFrame(loop);
   }
 
+  function startCompassTracker() {
+    if (compass) {
+      return;
+    }
+    setHeading(formatHeading(null, "waiting"));
+    compass = createCompassTracker((reading) => {
+      setHeading(formatHeading(reading));
+      annotate?.setLiveAnnotateState({ orientation: reading });
+    });
+    compass.start();
+    // If nothing arrives, surface that instead of a permanent "none".
+    window.setTimeout(() => {
+      if (!running || !compass || compass.getReading()?.heading != null) {
+        return;
+      }
+      if (!compass.hasReceivedEvent()) {
+        setHeading(formatHeading(null, "no-events"));
+      } else {
+        setHeading(formatHeading(compass.getReading(), "no-events"));
+      }
+    }, 2500);
+  }
+
   async function startLiveDetection() {
     if (running) {
       return;
     }
+    // Must stay synchronous in the Start click (before any await) for iOS permission.
     const compassPermission = requestCompassPermission();
 
     liveToggle.disabled = true;
@@ -1155,7 +1193,7 @@ export function initLiveDetectionPage(annotate = null) {
       updateMetricsPanel();
 
       headingText = null;
-      setHeading(formatHeading(null), false);
+      setHeading(formatHeading(null, "waiting"));
 
       video.srcObject = stream;
       await video.play();
@@ -1173,16 +1211,18 @@ export function initLiveDetectionPage(annotate = null) {
         backend: backendInfo,
         captureFrame,
       });
-      compassPermission.then((state) => {
-        if (state !== "granted" || !running || compass) {
-          return;
-        }
-        compass = createCompassTracker((reading) => {
-          setHeading(formatHeading(reading), reading?.heading != null);
-          annotate?.setLiveAnnotateState({ orientation: reading });
-        });
-        compass.start();
-      });
+      // Await after running=true so Android's immediate "granted" doesn't race past startup.
+      const compassState = await compassPermission;
+      if (!running) {
+        return;
+      }
+      if (compassState === "granted") {
+        startCompassTracker();
+      } else if (compassState === "denied") {
+        setHeading(formatHeading(null, "denied"));
+      } else {
+        setHeading(formatHeading(null, "unavailable"));
+      }
       console.log(
         `[LIVE] analysesPerSecond=${getSettings().analysesPerSecond} intervalMs=${inferenceIntervalMsFromSettings()}`,
       );
@@ -1450,7 +1490,7 @@ export function initLiveDetectionPage(annotate = null) {
     select.addEventListener("change", () => scheduleAutoLook());
   }
   ensureGps();
-  setHeading(formatHeading(null), false);
+  setHeading(formatHeading(null, "unavailable"));
   annotate?.setLiveAnnotateState({
     captureFrame,
     gpsFix,

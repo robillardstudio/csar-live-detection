@@ -48,6 +48,52 @@ function formatObjectScore(score) {
   return normalizeScore(score).toFixed(2);
 }
 
+// Map boxes onto the visible object-fit content rect (contain letterboxing / cover cropping).
+function getObjectFitContentRect(element, container) {
+  const containerRect = container.getBoundingClientRect();
+  const mediaW =
+    element.videoWidth || element.naturalWidth || element.width || 0;
+  const mediaH =
+    element.videoHeight || element.naturalHeight || element.height || 0;
+  const containerW = containerRect.width;
+  const containerH = containerRect.height;
+  if (!mediaW || !mediaH || !containerW || !containerH) {
+    return { left: 0, top: 0, width: containerW, height: containerH };
+  }
+
+  const fit = getComputedStyle(element).objectFit || "fill";
+  const mediaRatio = mediaW / mediaH;
+  const containerRatio = containerW / containerH;
+  let width = containerW;
+  let height = containerH;
+  let left = 0;
+  let top = 0;
+
+  if (fit === "contain") {
+    if (mediaRatio > containerRatio) {
+      width = containerW;
+      height = containerW / mediaRatio;
+      top = (containerH - height) / 2;
+    } else {
+      height = containerH;
+      width = containerH * mediaRatio;
+      left = (containerW - width) / 2;
+    }
+  } else if (fit === "cover") {
+    if (mediaRatio > containerRatio) {
+      height = containerH;
+      width = containerH * mediaRatio;
+      left = (containerW - width) / 2;
+    } else {
+      width = containerW;
+      height = containerW / mediaRatio;
+      top = (containerH - height) / 2;
+    }
+  }
+
+  return { left, top, width, height };
+}
+
 function drawBoundingBoxes(container, results, dimensionSource) {
   const image = dimensionSource ?? container.querySelector("img");
   if (!image || !results?.length) {
@@ -61,6 +107,13 @@ function drawBoundingBoxes(container, results, dimensionSource) {
 
   const layer = document.createElement("div");
   layer.className = "bounding-boxes";
+  const content = getObjectFitContentRect(image, container);
+  layer.style.left = `${content.left}px`;
+  layer.style.top = `${content.top}px`;
+  layer.style.width = `${content.width}px`;
+  layer.style.height = `${content.height}px`;
+  layer.style.right = "auto";
+  layer.style.bottom = "auto";
 
   for (const result of results) {
     const percentBox = boxToPercentages(result.box, image);
