@@ -1,6 +1,7 @@
 // Live-mode co-annotation: label list, FAB add sheet, row actions, undo toast.
 import {
   findLatestAiRowForLabel,
+  isLabelLoggedInActiveRecording,
   logUserAction,
   onLiveDetectionLogCleared,
   removeUserLogRow,
@@ -406,12 +407,22 @@ export function initLiveAnnotate() {
     const name = document.createElement("span");
     name.className = "ai-labels__name";
     name.textContent = entry.label;
+    const badges = document.createElement("span");
+    badges.className = "ai-labels__badges";
     const count = document.createElement("span");
     count.className = "ai-labels__count mono";
     count.dataset.count = entry.label;
     const history = byLabel.get(entry.label);
-    count.textContent = String(history?.count ?? entry.count ?? 1);
-    r1.append(name, count);
+    const seen = history?.count ?? entry.count ?? 1;
+    count.textContent = `seen ${seen}×`;
+    badges.append(count);
+    if (isLabelLoggedInActiveRecording(entry.label)) {
+      const logged = document.createElement("span");
+      logged.className = "ai-labels__logged";
+      logged.textContent = "logged ✓";
+      badges.append(logged);
+    }
+    r1.append(name, badges);
 
     const meta = document.createElement("div");
     meta.className = "ai-labels__meta";

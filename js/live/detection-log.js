@@ -26,6 +26,24 @@ export function getRecordings() {
   return recordings;
 }
 
+export function getActiveRecordingId() {
+  return activeRecording?.recording_id ?? null;
+}
+
+/** True if this label already has a log/CSV row in the active recording. */
+export function isLabelLoggedInActiveRecording(label) {
+  const recordingId = activeRecording?.recording_id;
+  const needle = String(label ?? "").trim();
+  if (recordingId == null || !needle) {
+    return false;
+  }
+  return log.some(
+    (row) =>
+      row.recording_id === recordingId &&
+      String(row.label ?? "").trim() === needle,
+  );
+}
+
 // null means all recordings.
 export function getRecordingRows(recordingId) {
   return recordingId == null

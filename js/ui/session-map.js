@@ -5,16 +5,17 @@ const LEAFLET_CSS =
   "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
 const LEAFLET_JS =
   "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
-const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
-const TILE_ATTRIBUTION =
+const DARK_TILE_URL =
+  "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
+const DARK_TILE_ATTRIBUTION = "© OpenStreetMap contributors © CARTO";
+const STREET_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+const STREET_TILE_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 const SINGLE_POINT_ZOOM = 18;
 const MAX_ZOOM = 19;
 // Below this zoom, dots are too close together for readable labels.
 const LABEL_MIN_ZOOM = 18;
 const PHONE_QUERY = "(max-width: 640px)";
-// One color per recording with "All recordings"; none match a label color. Paths past the palette are dashed.
-const PATH_PALETTE = ["#2563eb", "#65a30d", "#4f46e5"];
 const OVERLAYS = [
   ["path", "Walking path"],
   ["viewer", "Where I was"],
@@ -22,10 +23,11 @@ const OVERLAYS = [
   ["sightLines", "Sight lines"],
   ["labels", 'Labels <span class="map-layers__hint">(zoom in)</span>'],
 ];
-const COLOR_AI = "#16a34a";
-const COLOR_USER = "#ea580c";
-const DOT_RADIUS_AI = 5;
-const DOT_RADIUS_USER = 8;
+const COLOR_AI = "#39E58C";
+const COLOR_USER = "#FF8A2A";
+const PATH_COLOR = "#ffffff";
+const PATH_OPACITY = 0.25;
+const PATH_WEIGHT = 1.5;
 const LEGEND_LIMIT = 8;
 // 5 decimal places is ~1 m, finer than phone GPS accuracy.
 const DEDUPE_DECIMALS = 5;
@@ -35,7 +37,17 @@ const FAN_MIN_RADIUS_PX = 16;
 const FAN_SPACING_PX = 13;
 
 // Kept for the page visit across tabs, recordings and mode switches; no storage.
-const layerState = { base: "street", overlays: new Set(["path", "viewer"]) };
+const layerState = { base: "dark", overlays: new Set(["path", "viewer"]) };
+
+function dotRadiusForZoom(zoom) {
+  if (zoom <= 16) {
+    return 3;
+  }
+  if (zoom <= 18) {
+    return 4;
+  }
+  return 6;
+}
 let labelView = "changes";
 
 let map = null;
@@ -206,7 +218,8 @@ function latestOverrides(rows) {
 
 function addDot(points, labelCounts, position, fields) {
   const { lat, lon, ...extras } = position;
-  const key = `${lat.toFixed(DEDUPE_DECIMALS)},${lon.toFixed(DEDUPE_DECIMALS)},${fields.label},${fields.changed ? "u" : "a"}`;
+  const kind = fields.deleted ? "d" : fields.changed ? "u" : "a";
+  const key = `${lat.toFixed(DEDUPE_DECIMALS)},${lon.toFixed(DEDUPE_DECIMALS)},${fields.label},${kind}`;
   labelCounts.set(fields.label, (labelCounts.get(fields.label) ?? 0) + 1);
   const confidence = Number(fields.confidence);
   const existing = points.get(key);
@@ -246,6 +259,15 @@ function extractDetectionPoints(rows, positionOf, withChanges) {
 
     const override = withChanges ? overrides.get(row.id) : null;
     if (override?.action === "delete") {
+      addDot(points, labelCounts, position, {
+        label: aiLabel,
+        aiLabel,
+        userLabel: null,
+        changed: false,
+        deleted: true,
+        row,
+        confidence: row.confidence,
+      });
       continue;
     }
     const replace = override?.action === "replace" ? override : null;
@@ -257,6 +279,7 @@ function extractDetectionPoints(rows, positionOf, withChanges) {
       aiLabel,
       userLabel: replace?.label ?? null,
       changed: Boolean(replace),
+      deleted: false,
       row,
       confidence: row.confidence,
     });
@@ -277,6 +300,7 @@ function extractDetectionPoints(rows, positionOf, withChanges) {
         aiLabel: row.refers_to_label ?? label,
         userLabel: label,
         changed: true,
+        deleted: false,
         row: null,
         confidence: null,
       });
@@ -322,7 +346,12 @@ function detectionPopup(dot, stackSize, kind) {
   title.textContent = `${dot.label} — ${confidence}${distance}`;
   content.appendChild(title);
 
-  if (dot.changed && dot.userLabel && dot.row) {
+  if (dot.deleted) {
+    const deleted = document.createElement("p");
+    deleted.className = "map-popup__note";
+    deleted.textContent = "Deleted";
+    content.appendChild(deleted);
+  } else if (dot.changed && dot.userLabel && dot.row) {
     const changeNote = document.createElement("p");
     changeNote.className = "map-popup__note";
     changeNote.textContent = `AI said: ${dot.aiLabel} → changed to: ${dot.userLabel}`;
@@ -405,7 +434,31 @@ function fanOffset(index, count) {
   return [radius * Math.cos(angle), radius * Math.sin(angle)];
 }
 
-function drawDots(L, detections, kind, panel) {
+function dotStyle(dot, radius) {
+  if (dot.deleted) {
+    return {
+      pane: "mapDots",
+      radius,
+      color: COLOR_USER,
+      weight: 1.5,
+      fill: false,
+      fillOpacity: 0,
+      className: "map-dot map-dot--deleted",
+    };
+  }
+  const fill = dot.changed ? COLOR_USER : COLOR_AI;
+  return {
+    pane: "mapDots",
+    radius,
+    color: fill,
+    weight: 0,
+    fillColor: fill,
+    fillOpacity: 0.85,
+    className: `map-dot ${dot.changed ? "map-dot--user" : "map-dot--ai"}`,
+  };
+}
+
+function drawDots(L, detections, kind) {
   const layer = L.layerGroup();
   const groups = new Map();
   for (const dot of detections.dots) {
@@ -417,18 +470,13 @@ function drawDots(L, detections, kind, panel) {
   }
 
   const fanned = [];
+  const markers = [];
+  const radius = dotRadiusForZoom(map?.getZoom?.() ?? SINGLE_POINT_ZOOM);
   for (const group of groups.values()) {
     const center = L.latLng(group[0].lat, group[0].lon);
     group.forEach((dot, index) => {
       // Label text is set as a text node; Leaflet would parse a string as HTML.
-      const marker = L.circleMarker(center, {
-        pane: "mapDots",
-        radius: dot.changed ? DOT_RADIUS_USER : DOT_RADIUS_AI,
-        color: panel,
-        weight: 1,
-        fillColor: dot.changed ? COLOR_USER : COLOR_AI,
-        fillOpacity: 0.9,
-      })
+      const marker = L.circleMarker(center, dotStyle(dot, radius))
         .bindPopup(detectionPopup(dot, group.length, kind))
         .bindTooltip(document.createTextNode(dot.label), {
           permanent: true,
@@ -437,12 +485,13 @@ function drawDots(L, detections, kind, panel) {
           className: "map-dot-label",
         })
         .addTo(layer);
+      markers.push(marker);
       if (group.length > 1) {
         fanned.push({ marker, center, offset: L.point(fanOffset(index, group.length)) });
       }
     });
   }
-  return { layer, fanned };
+  return { layer, fanned, markers };
 }
 
 function placeFanned(fanned) {
@@ -456,23 +505,21 @@ function placeFanned(fanned) {
 function drawSightLines(L, detections) {
   const layer = L.layerGroup();
   for (const dot of detections.dots) {
+    if (!dot.viewer) {
+      continue;
+    }
     L.polyline([dot.viewer, [dot.lat, dot.lon]], {
       pane: "mapLines",
-      color: dot.changed ? COLOR_USER : COLOR_AI,
-      weight: 1.5,
-      opacity: 0.4,
+      color: dot.deleted || dot.changed ? COLOR_USER : COLOR_AI,
+      weight: 1,
+      opacity: 0.35,
       interactive: false,
     }).addTo(layer);
   }
   return layer;
 }
 
-function pathStyle(index) {
-  const color = PATH_PALETTE[index % PATH_PALETTE.length];
-  return index < PATH_PALETTE.length ? { color } : { color, dashArray: "8 6" };
-}
-
-function drawPaths(L, paths, accent) {
+function drawPaths(L, paths) {
   const layer = L.layerGroup();
   const named = paths.length > 1;
   const recordings = [];
@@ -480,20 +527,28 @@ function drawPaths(L, paths, accent) {
   paths.forEach(({ recordingId, points }, index) => {
     const name = `Recording ${recordingId}`;
     const prefix = named ? `${name} · ` : "";
-    const style = named ? pathStyle(index) : { color: accent };
+    const style = {
+      color: PATH_COLOR,
+      ...(index > 0 ? { dashArray: "4 6" } : {}),
+    };
 
     if (points.length > 1) {
-      L.polyline(points, { pane: "mapPath", weight: 4, opacity: 0.9, ...style }).addTo(layer);
+      L.polyline(points, {
+        pane: "mapPath",
+        weight: PATH_WEIGHT,
+        opacity: PATH_OPACITY,
+        ...style,
+      }).addTo(layer);
     }
 
-    // Hollow rings mark the location without covering detections.
-    // Different radii keep both rings visible when start and end coincide.
     L.circleMarker(points[0], {
       pane: "mapPath",
-      radius: 10,
-      color: "#16a34a",
-      weight: 3,
-      fill: false,
+      radius: 3,
+      color: "rgba(255,255,255,0.55)",
+      weight: 1,
+      fillColor: "rgba(255,255,255,0.3)",
+      fillOpacity: 1,
+      className: "map-path-endpoint",
     })
       .bindTooltip(`${prefix}Start`)
       .addTo(layer);
@@ -501,17 +556,19 @@ function drawPaths(L, paths, accent) {
     if (points.length > 1) {
       L.circleMarker(points.at(-1), {
         pane: "mapPath",
-        radius: 7,
-        color: "#dc2626",
-        weight: 3,
-        fill: false,
+        radius: 2.5,
+        color: "rgba(255,255,255,0.4)",
+        weight: 1,
+        fillColor: "rgba(255,255,255,0.2)",
+        fillOpacity: 1,
+        className: "map-path-endpoint",
       })
         .bindTooltip(`${prefix}End`)
         .addTo(layer);
     }
 
     if (named) {
-      recordings.push({ name, ...style });
+      recordings.push({ name, color: PATH_COLOR, dashArray: style.dashArray });
     }
   });
   return { layer, recordings };
@@ -577,23 +634,28 @@ function renderLegend(legend, recordings, detections) {
   }
 
   if (detections?.dots.length) {
-    const changedCount = detections.dots.filter((dot) => dot.changed).length;
+    const deletedCount = detections.dots.filter((dot) => dot.deleted).length;
+    const changedCount = detections.dots.filter(
+      (dot) => dot.changed && !dot.deleted,
+    ).length;
+    const aiCount = detections.dots.length - changedCount - deletedCount;
     const aiSwatch = document.createElement("span");
     aiSwatch.className = "map-legend__swatch";
     aiSwatch.style.backgroundColor = COLOR_AI;
     const userSwatch = document.createElement("span");
     userSwatch.className = "map-legend__swatch";
     userSwatch.style.backgroundColor = COLOR_USER;
-    groups.push(
-      legendGroup("Annotation", [
-        {
-          swatch: aiSwatch,
-          name: "AI label",
-          count: detections.dots.length - changedCount,
-        },
-        { swatch: userSwatch, name: "Changed", count: changedCount },
-      ]),
-    );
+    const deleteSwatch = document.createElement("span");
+    deleteSwatch.className = "map-legend__swatch map-legend__swatch--ring";
+    deleteSwatch.style.borderColor = COLOR_USER;
+    const items = [
+      { swatch: aiSwatch, name: "AI label", count: aiCount },
+      { swatch: userSwatch, name: "User change", count: changedCount },
+    ];
+    if (deletedCount > 0) {
+      items.push({ swatch: deleteSwatch, name: "Deleted", count: deletedCount });
+    }
+    groups.push(legendGroup("Annotation", items));
   }
 
   if (detections?.labels.length) {
@@ -629,15 +691,20 @@ function drawMap(L, container, paths, snapshot, onChange) {
   map.createPane("mapLines").style.zIndex = "420";
   map.createPane("mapDots").style.zIndex = "430";
 
-  const panel = themeColor("--color-bg-panel", "#ffffff");
-  const viewer = drawDots(L, snapshot.viewer, "viewer", panel);
-  const objects = drawDots(L, snapshot.objects, "objects", panel);
-  const path = drawPaths(L, paths, themeColor("--color-accent", "#2563eb"));
+  const viewer = drawDots(L, snapshot.viewer, "viewer");
+  const objects = drawDots(L, snapshot.objects, "objects");
+  const path = drawPaths(L, paths);
+  const allMarkers = [...viewer.markers, ...objects.markers];
 
   const bases = {
-    street: L.tileLayer(TILE_URL, {
+    dark: L.tileLayer(DARK_TILE_URL, {
       maxZoom: MAX_ZOOM,
-      attribution: TILE_ATTRIBUTION,
+      attribution: DARK_TILE_ATTRIBUTION,
+      subdomains: "abcd",
+    }),
+    street: L.tileLayer(STREET_TILE_URL, {
+      maxZoom: MAX_ZOOM,
+      attribution: STREET_TILE_ATTRIBUTION,
     }),
     none: L.layerGroup(),
   };
@@ -650,6 +717,9 @@ function drawMap(L, container, paths, snapshot, onChange) {
     labels: L.layerGroup(),
   };
 
+  if (!bases[layerState.base]) {
+    layerState.base = "dark";
+  }
   bases[layerState.base].addTo(map);
   for (const key of layerState.overlays) {
     overlays[key].addTo(map);
@@ -663,7 +733,11 @@ function drawMap(L, container, paths, snapshot, onChange) {
   // Added after the saved layers so the control starts with the right boxes ticked.
   L.control
     .layers(
-      { "Street map": bases.street, None: bases.none },
+      {
+        "Dark map": bases.dark,
+        "Street map": bases.street,
+        None: bases.none,
+      },
       Object.fromEntries(OVERLAYS.map(([key, name]) => [name, overlays[key]])),
       { position: "topright", collapsed: window.matchMedia(PHONE_QUERY).matches },
     )
@@ -683,10 +757,18 @@ function drawMap(L, container, paths, snapshot, onChange) {
   });
 
   const fanned = [...viewer.fanned, ...objects.fanned];
+  function syncDotRadii() {
+    const radius = dotRadiusForZoom(map.getZoom());
+    for (const marker of allMarkers) {
+      marker.setRadius(radius);
+    }
+  }
   map.on("zoomend", () => {
+    syncDotRadii();
     placeFanned(fanned);
     onChange();
   });
+  syncDotRadii();
 
   layers = {
     recordings: path.recordings,
