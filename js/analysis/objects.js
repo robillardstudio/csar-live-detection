@@ -1,6 +1,7 @@
 // Runs the object detector from models.js and draws label/confidence boxes on the live feed.
 import { getModel, getModelEngine, loadModel } from "../models.js";
 import { detectObjectsWithMediaPipe } from "./mediapipe-detect.js";
+import { detectObjectsWithOiv7 } from "./oiv7-detect.js";
 
 const LABEL_COLORS = [
   "#e6194b",
@@ -251,6 +252,11 @@ export async function detectObjectsFromSource(source, options) {
   if (getModelEngine() === "mediapipe") {
     // MediaPipe expects a canvas / video / image element (not Transformers RawImage).
     return detectObjectsWithMediaPipe(source, { threshold, maxObjects });
+  }
+
+  if (getModelEngine() === "onnx") {
+    // OIV7 ONNX expects a canvas / video / image element for letterboxing.
+    return detectObjectsWithOiv7(source, { threshold, maxObjects });
   }
 
   await loadModel("objectDetector");

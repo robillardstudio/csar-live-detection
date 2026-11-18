@@ -98,6 +98,9 @@ export function initModelsSheet({ getModels, getSelectedId, onSelect }) {
     if (option.engine === "gemini") {
       return "On demand · Look freezes a frame for boxes";
     }
+    if (option.id === "yolov8n-oiv7") {
+      return "Detection · Open Images V7, 601 classes";
+    }
     if (option.task === "classification") {
       return "Classification · names the whole frame";
     }

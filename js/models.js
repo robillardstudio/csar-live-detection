@@ -1,5 +1,5 @@
 // Loads Transformers.js pipelines (object-detection or image-classification) and chooses WebGPU or WASM.
-// MediaPipe EfficientDet-Lite0 is a separate engine (see analysis/mediapipe-detect.js).
+// MediaPipe EfficientDet-Lite0 and YOLOv8n-OIV7 are separate engines.
 // live-detection.js reads the resolved device/dtype via getObjectDetectorBackend().
 import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.2.1";
 import { isPhone } from "./utils/device.js";
@@ -8,6 +8,11 @@ import {
   getMediaPipeBackend,
   loadMediaPipeObjectDetector,
 } from "./analysis/mediapipe-detect.js";
+import {
+  disposeOiv7ObjectDetector,
+  getOiv7Backend,
+  loadOiv7ObjectDetector,
+} from "./analysis/oiv7-detect.js";
 
 export const MODEL_OPTIONS = [
   { id: "Xenova/yolos-tiny", label: "YOLOS-tiny (detection)", task: "detection", engine: "transformers", enabled: true },
@@ -17,6 +22,13 @@ export const MODEL_OPTIONS = [
     label: "MediaPipe EfficientDet-Lite0 (detection)",
     task: "detection",
     engine: "mediapipe",
+    enabled: true,
+  },
+  {
+    id: "yolov8n-oiv7",
+    label: "YOLOv8n-OIV7 (detection, 601 classes)",
+    task: "detection",
+    engine: "onnx",
     enabled: true,
   },
   {
@@ -101,6 +113,9 @@ let resolvedBackendPromise = pickBackend();
 export async function getObjectDetectorBackend() {
   if (getModelEngine() === "mediapipe") {
     return getMediaPipeBackend();
+  }
+  if (getModelEngine() === "onnx") {
+    return getOiv7Backend();
   }
   if (getModelEngine() === "gemini") {
     return { device: "gemini", dtype: "api" };
@@ -208,7 +223,9 @@ export async function loadModel(modelName) {
   const loadPromise = (
     engine === "mediapipe" && modelName === "objectDetector"
       ? loadMediaPipeObjectDetector()
-      : createPipeline(config.task, requestedModel)
+      : engine === "onnx" && modelName === "objectDetector"
+        ? loadOiv7ObjectDetector()
+        : createPipeline(config.task, requestedModel)
   )
     .then((instance) => {
       if (config.model !== requestedModel) {
@@ -298,6 +315,10 @@ export async function setDetectionModel(modelId) {
 function disposeLoadedModel(detectorInstance, classifierInstance, engine) {
   if (engine === "mediapipe") {
     disposeMediaPipeObjectDetector();
+    return;
+  }
+  if (engine === "onnx") {
+    disposeOiv7ObjectDetector();
     return;
   }
   disposePipeline(detectorInstance);

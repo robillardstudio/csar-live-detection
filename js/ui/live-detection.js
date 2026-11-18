@@ -83,7 +83,9 @@ const ROLLING_WINDOW = 30;
 const MAX_INFERENCE_EDGE = 640;
 const STILL_MOVE_M = 3;
 const HEARTBEAT_MS = 10_000;
-const SPOT_DECIMALS = 4;
+// All models: skip logging a label if the same label was logged within 20 s and 15 m.
+const LABEL_PLACE_COOLDOWN_MS = 20_000;
+const LABEL_PLACE_RADIUS_M = 15;
 
 // Coarse-pointer devices (iPad etc.) wait ~700ms between completed inferences so memory can release.
 // Desktop stays uncapped unless Analyses/sec is set (MobileNet default 2; detectors default Max).
@@ -343,7 +345,8 @@ export function initLiveDetectionPage(annotate = null) {
   let lastLogThumb = null;
   let lastLogGps = null;
   let lastLogAt = 0;
-  const spotLabels = new Map();
+  // label → [{ lat, lon, at }] recent place logs for cooldown dedupe.
+  const labelPlaceLog = new Map();
   const stillIndicators = [
     document.getElementById("still-indicator"),
     document.querySelector("[data-still-sidebar]"),
@@ -357,37 +360,57 @@ export function initLiveDetectionPage(annotate = null) {
     }
   }
 
-  function spotKey(gpsFix) {
-    if (gpsFix?.lat == null || gpsFix?.lon == null) {
-      return "unknown";
-    }
-    return `${gpsFix.lat.toFixed(SPOT_DECIMALS)},${gpsFix.lon.toFixed(SPOT_DECIMALS)}`;
-  }
-
-  function labelsSeenAtSpot(gpsFix) {
-    const key = spotKey(gpsFix);
-    if (!spotLabels.has(key)) {
-      spotLabels.set(key, new Set());
-    }
-    return spotLabels.get(key);
-  }
-
-  function rememberLoggedLabels(detections, gpsFix) {
-    const seen = labelsSeenAtSpot(gpsFix);
-    for (const detection of detections) {
-      const label = String(detection.label ?? "").trim();
-      if (label) {
-        seen.add(label);
+  function pruneLabelPlaceLog(now) {
+    for (const [label, entries] of labelPlaceLog) {
+      const kept = entries.filter(
+        (entry) => now - entry.at <= LABEL_PLACE_COOLDOWN_MS,
+      );
+      if (kept.length) {
+        labelPlaceLog.set(label, kept);
+      } else {
+        labelPlaceLog.delete(label);
       }
     }
   }
 
-  function filterNewForSpot(detections, gpsFix) {
-    const seen = labelsSeenAtSpot(gpsFix);
-    return detections.filter((detection) => {
+  function wasLoggedNearRecently(label, gpsFix, now) {
+    const entries = labelPlaceLog.get(label);
+    if (!entries?.length) {
+      return false;
+    }
+    for (const entry of entries) {
+      if (now - entry.at > LABEL_PLACE_COOLDOWN_MS) {
+        continue;
+      }
+      // No GPS: treat same label within the time window as same place.
+      if (gpsFix?.lat == null || gpsFix?.lon == null || entry.lat == null) {
+        return true;
+      }
+      if (
+        distanceMeters(gpsFix, { lat: entry.lat, lon: entry.lon }) <=
+        LABEL_PLACE_RADIUS_M
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function rememberLabelPlaces(detections, gpsFix, now) {
+    for (const detection of detections) {
       const label = String(detection.label ?? "").trim();
-      return label && !seen.has(label);
-    });
+      if (!label) {
+        continue;
+      }
+      if (!labelPlaceLog.has(label)) {
+        labelPlaceLog.set(label, []);
+      }
+      labelPlaceLog.get(label).push({
+        lat: gpsFix?.lat ?? null,
+        lon: gpsFix?.lon ?? null,
+        at: now,
+      });
+    }
   }
 
   function markLoggedFrame(thumb, gpsFix, at) {
@@ -400,7 +423,7 @@ export function initLiveDetectionPage(annotate = null) {
     lastLogThumb = null;
     lastLogGps = null;
     lastLogAt = 0;
-    spotLabels.clear();
+    labelPlaceLog.clear();
     setStillPaused(false);
   }
 
@@ -417,39 +440,59 @@ export function initLiveDetectionPage(annotate = null) {
       needsHeartbeat,
     },
   ) {
+    // Row ids aligned with `detections` (null when skipped / not recording).
+    const aligned = detections.map(() => null);
+
     if (!isRecording || generation !== logGeneration) {
       if (!isStill || needsHeartbeat) {
         markLoggedFrame(thumb, gpsFix, now);
       }
-      return [];
+      return aligned;
     }
 
-    let toLog = detections;
-    if (isStill && !needsHeartbeat) {
-      toLog = filterNewForSpot(detections, gpsFix);
-      if (!toLog.length) {
-        return [];
+    pruneLabelPlaceLog(now);
+    const toLog = [];
+    const toLogIndexes = [];
+    const queuedLabels = new Set();
+    for (let i = 0; i < detections.length; i += 1) {
+      const detection = detections[i];
+      const label = String(detection.label ?? "").trim();
+      if (
+        !label ||
+        queuedLabels.has(label) ||
+        wasLoggedNearRecently(label, gpsFix, now)
+      ) {
+        continue;
       }
+      queuedLabels.add(label);
+      toLog.push(detection);
+      toLogIndexes.push(i);
     }
 
-    const logged = toLog.length
-      ? logDetectionFrame({
-          detections: toLog,
-          frameW,
-          frameH,
-          inferenceMs,
-          timestamp: now,
-          gpsFix,
-          orientation,
-          backend: backendInfo,
-          modelId: getModelId(),
-        })
-      : [];
-    if (toLog.length) {
-      rememberLoggedLabels(toLog, gpsFix);
+    if (!toLog.length) {
+      if (!isStill || needsHeartbeat) {
+        markLoggedFrame(thumb, gpsFix, now);
+      }
+      return aligned;
     }
+
+    const logged = logDetectionFrame({
+      detections: toLog,
+      frameW,
+      frameH,
+      inferenceMs,
+      timestamp: now,
+      gpsFix,
+      orientation,
+      backend: backendInfo,
+      modelId: getModelId(),
+    });
+    for (let i = 0; i < logged.length; i += 1) {
+      aligned[toLogIndexes[i]] = logged[i];
+    }
+    rememberLabelPlaces(toLog, gpsFix, now);
     markLoggedFrame(thumb, gpsFix, now);
-    return logged;
+    return aligned;
   }
 
   // A metric can appear in both the sidebar and the phone status strip.
@@ -1152,9 +1195,10 @@ export function initLiveDetectionPage(annotate = null) {
         );
         annotate?.setLiveAnnotateState({ orientation, gpsFix: gpsNow });
       } else {
-        // MediaPipe needs the canvas element; Transformers gets RawImage/data URL.
+        // MediaPipe / OIV7 need the canvas element; Transformers gets RawImage/data URL.
+        const engine = getModelEngine();
         const detectionSource =
-          getModelEngine() === "mediapipe" ? frameCanvas : input;
+          engine === "mediapipe" || engine === "onnx" ? frameCanvas : input;
         const rawDetections = await detectObjectsFromSource(detectionSource, {
           threshold: confidenceFloor,
           maxObjects: parameters.maxObjects,

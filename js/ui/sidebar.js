@@ -37,10 +37,22 @@ const DETECTOR_DEFAULTS = {
   maxObjects: 10,
 };
 
+// YOLOv8n-OIV7: 5 analyses/s, score floor 0.25, NMS max 20.
+const OIV7_DEFAULTS = {
+  analysesPerSecond: 5,
+  minConfidence: 0.25,
+  skipWhenStill: false,
+  stillSensitivity: "medium",
+  maxObjects: 20,
+};
+
 /** @type {Record<string, typeof MOBILENET_DEFAULTS>} */
 const byModel = Object.create(null);
 
 function defaultsForModel(modelId) {
+  if (modelId === "yolov8n-oiv7") {
+    return { ...OIV7_DEFAULTS };
+  }
   const task =
     MODEL_OPTIONS.find((item) => item.id === modelId)?.task ?? "detection";
   return {
