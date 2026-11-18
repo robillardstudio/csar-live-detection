@@ -83,8 +83,11 @@ const ROLLING_WINDOW = 30;
 const MAX_INFERENCE_EDGE = 640;
 const STILL_MOVE_M = 3;
 const HEARTBEAT_MS = 10_000;
-// Per recording: skip a label already logged within max(15 m, current gps_accuracy).
+// Fallback (no absolute heading): skip same label within max(15 m, gps_accuracy).
 const LABEL_PLACE_RADIUS_M = 15;
+// With heading: skip same label within max(8 m, gps_accuracy) and within 20° bearing.
+const LABEL_BEARING_RADIUS_M = 8;
+const LABEL_BEARING_DELTA_DEG = 20;
 const GPS_GOOD_ACCURACY_M = 25;
 const COUNT_IN_VIEW_WINDOW_MS = 2000;
 
@@ -365,12 +368,27 @@ export function initLiveDetectionPage(annotate = null) {
     }
   }
 
-  function placeRadiusM(gpsFix) {
+  function placeRadiusM(gpsFix, floorM) {
     const accuracy = Number(gpsFix?.accuracy);
     if (!Number.isFinite(accuracy) || accuracy <= 0) {
-      return LABEL_PLACE_RADIUS_M;
+      return floorM;
     }
-    return Math.max(LABEL_PLACE_RADIUS_M, accuracy);
+    return Math.max(floorM, accuracy);
+  }
+
+  function bearingDeltaDeg(a, b) {
+    if (!Number.isFinite(a) || !Number.isFinite(b)) {
+      return null;
+    }
+    return Math.abs((((a - b) % 360) + 540) % 360 - 180);
+  }
+
+  function hasUsableHeading(orientation) {
+    return (
+      orientation?.cameraHeading != null &&
+      orientation?.relativeOnly !== true &&
+      compass?.isRelativeOnly?.() !== true
+    );
   }
 
   function wasLoggedNearPlace(label, gpsFix) {
@@ -378,7 +396,7 @@ export function initLiveDetectionPage(annotate = null) {
     if (!entries?.length) {
       return false;
     }
-    const radius = placeRadiusM(gpsFix);
+    const radius = placeRadiusM(gpsFix, LABEL_PLACE_RADIUS_M);
     for (const entry of entries) {
       if (gpsFix?.lat == null || gpsFix?.lon == null || entry.lat == null) {
         return true;
@@ -392,6 +410,46 @@ export function initLiveDetectionPage(annotate = null) {
     return false;
   }
 
+  function wasLoggedNearPlaceAndBearing(label, gpsFix, bearing) {
+    const entries = labelPlaceLog.get(label);
+    if (!entries?.length) {
+      return false;
+    }
+    const radius = placeRadiusM(gpsFix, LABEL_BEARING_RADIUS_M);
+    for (const entry of entries) {
+      if (gpsFix?.lat == null || gpsFix?.lon == null || entry.lat == null) {
+        // No GPS: same label + similar bearing counts as a duplicate.
+        const delta = bearingDeltaDeg(entry.bearing, bearing);
+        if (delta != null && delta <= LABEL_BEARING_DELTA_DEG) {
+          return true;
+        }
+        continue;
+      }
+      if (
+        distanceMeters(gpsFix, { lat: entry.lat, lon: entry.lon }) > radius
+      ) {
+        continue;
+      }
+      const delta = bearingDeltaDeg(entry.bearing, bearing);
+      if (delta != null && delta <= LABEL_BEARING_DELTA_DEG) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function shouldSkipLoggedDetection(detection, gpsFix, orientation) {
+    const label = String(detection.label ?? "").trim();
+    if (!label) {
+      return true;
+    }
+    const bearing = Number(detection.bearing);
+    if (hasUsableHeading(orientation) && Number.isFinite(bearing)) {
+      return wasLoggedNearPlaceAndBearing(label, gpsFix, bearing);
+    }
+    return wasLoggedNearPlace(label, gpsFix);
+  }
+
   function rememberLabelPlaces(detections, gpsFix) {
     for (const detection of detections) {
       const label = String(detection.label ?? "").trim();
@@ -401,9 +459,11 @@ export function initLiveDetectionPage(annotate = null) {
       if (!labelPlaceLog.has(label)) {
         labelPlaceLog.set(label, []);
       }
+      const bearing = Number(detection.bearing);
       labelPlaceLog.get(label).push({
         lat: gpsFix?.lat ?? null,
         lon: gpsFix?.lon ?? null,
+        bearing: Number.isFinite(bearing) ? bearing : null,
       });
     }
   }
@@ -531,7 +591,10 @@ export function initLiveDetectionPage(annotate = null) {
       gpsQuality: tapQuality,
     });
     if (logged?.id != null) {
-      rememberLabelPlaces([{ label }], tapGps);
+      rememberLabelPlaces(
+        [{ label, bearing: detection?.bearing ?? null }],
+        tapGps,
+      );
       annotate?.noteLiveLabels?.([
         {
           label,
@@ -582,22 +645,18 @@ export function initLiveDetectionPage(annotate = null) {
       return aligned;
     }
 
+    // Per box (not per label): log each box unless place+bearing (or place fallback) says skip.
     const toLog = [];
     const toLogIndexes = [];
-    const queuedLabels = new Set();
     for (let i = 0; i < detections.length; i += 1) {
       const detection = detections[i];
-      const label = String(detection.label ?? "").trim();
-      if (
-        !label ||
-        queuedLabels.has(label) ||
-        wasLoggedNearPlace(label, gpsFix)
-      ) {
+      if (shouldSkipLoggedDetection(detection, gpsFix, orientation)) {
         continue;
       }
-      queuedLabels.add(label);
       toLog.push(detection);
       toLogIndexes.push(i);
+      // Remember immediately so later boxes in this frame are deduped too.
+      rememberLabelPlaces([detection], gpsFix);
     }
 
     if (!toLog.length) {
@@ -622,7 +681,6 @@ export function initLiveDetectionPage(annotate = null) {
     for (let i = 0; i < logged.length; i += 1) {
       aligned[toLogIndexes[i]] = logged[i];
     }
-    rememberLabelPlaces(toLog, gpsFix);
     markLoggedFrame(thumb, gpsFix, now);
     return aligned;
   }

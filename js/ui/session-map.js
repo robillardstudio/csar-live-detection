@@ -216,7 +216,11 @@ function addDot(points, labelCounts, position, fields) {
   const { lat, lon, ...extras } = position;
   const kind = fields.deleted ? "d" : fields.changed ? "u" : "a";
   const key = `${lat.toFixed(DEDUPE_DECIMALS)},${lon.toFixed(DEDUPE_DECIMALS)},${fields.label},${kind}`;
-  labelCounts.set(fields.label, (labelCounts.get(fields.label) ?? 0) + 1);
+  const prior = labelCounts.get(fields.label) ?? { count: 0, user: false };
+  labelCounts.set(fields.label, {
+    count: prior.count + 1,
+    user: prior.user || Boolean(fields.changed || fields.deleted),
+  });
   const confidence = Number(fields.confidence);
   const existing = points.get(key);
   if (existing) {
@@ -304,7 +308,11 @@ function extractDetectionPoints(rows, positionOf, withChanges) {
   }
 
   const labels = [...labelCounts.entries()]
-    .map(([label, count]) => ({ label, count }))
+    .map(([label, meta]) => ({
+      label,
+      count: meta.count,
+      user: Boolean(meta.user),
+    }))
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
   const rank = new Map(labels.map((item, index) => [item.label, index]));
 
@@ -433,7 +441,7 @@ function fanOffset(index, count) {
 function dotStyle(dot, radius) {
   if (dot.deleted) {
     return {
-      pane: "mapDots",
+      pane: "mapDotsUser",
       radius,
       color: COLOR_USER,
       weight: 1.5,
@@ -442,15 +450,25 @@ function dotStyle(dot, radius) {
       className: "map-dot map-dot--deleted",
     };
   }
-  const fill = dot.changed ? COLOR_USER : COLOR_AI;
+  if (dot.changed) {
+    return {
+      pane: "mapDotsUser",
+      radius,
+      color: COLOR_USER,
+      weight: 0,
+      fillColor: COLOR_USER,
+      fillOpacity: 0.9,
+      className: "map-dot map-dot--user",
+    };
+  }
   return {
-    pane: "mapDots",
+    pane: "mapDotsAi",
     radius,
-    color: fill,
+    color: COLOR_AI,
     weight: 0,
-    fillColor: fill,
-    fillOpacity: 0.85,
-    className: `map-dot ${dot.changed ? "map-dot--user" : "map-dot--ai"}`,
+    fillColor: COLOR_AI,
+    fillOpacity: 0.55,
+    className: "map-dot map-dot--ai",
   };
 }
 
@@ -660,7 +678,7 @@ function renderLegend(legend, recordings, detections) {
       detections.labels.slice(0, LEGEND_LIMIT).map((item) => {
         const swatch = document.createElement("span");
         swatch.className = "map-legend__swatch";
-        swatch.style.backgroundColor = COLOR_AI;
+        swatch.style.backgroundColor = item.user ? COLOR_USER : COLOR_AI;
         return { swatch, name: item.label, count: item.count };
       }),
     );
@@ -685,7 +703,9 @@ function drawMap(L, container, paths, snapshot, onChange) {
   // Fixed panes keep path < sight lines < dots when layers are toggled off and on again.
   map.createPane("mapPath").style.zIndex = "410";
   map.createPane("mapLines").style.zIndex = "420";
-  map.createPane("mapDots").style.zIndex = "430";
+  map.createPane("mapDotsAi").style.zIndex = "430";
+  // User (orange) markers sit above AI (green).
+  map.createPane("mapDotsUser").style.zIndex = "440";
 
   const viewer = drawDots(L, snapshot.viewer, "viewer");
   const objects = drawDots(L, snapshot.objects, "objects");
