@@ -135,6 +135,7 @@ export function logUserAction({
   frameW = null,
   frameH = null,
   prompt = null,
+  gpsQuality = null,
 }) {
   if (action !== "add" && action !== "replace" && action !== "delete") {
     return null;
@@ -154,6 +155,7 @@ export function logUserAction({
     lon: gpsFix?.lon ?? null,
     gps_accuracy: gpsFix?.accuracy ?? null,
     gps_timestamp: gpsFix?.timestamp ?? null,
+    gps_quality: gpsQuality ?? null,
     heading: orientation?.heading ?? null,
     camera_heading: orientation?.cameraHeading ?? null,
     object_bearing: null,
@@ -270,6 +272,7 @@ export function logDetectionFrame({
   modelId,
   prompt = null,
   forceLog = false,
+  gpsQuality = null,
 }) {
   if (detections.length > 0) {
     sessionStart ??= timestamp;
@@ -293,6 +296,7 @@ export function logDetectionFrame({
       lon: gpsFix?.lon ?? null,
       gps_accuracy: gpsFix?.accuracy ?? null,
       gps_timestamp: gpsFix?.timestamp ?? null,
+      gps_quality: gpsQuality ?? null,
       heading: orientation?.heading ?? null,
       camera_heading: orientation?.cameraHeading ?? null,
       object_bearing: detection.bearing ?? null,

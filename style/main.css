@@ -745,11 +745,19 @@ button:active {
   padding: 10px 16px 4px;
 }
 
-.labels-rail .ai-labels__list {
+.labels-rail .ai-labels__scroll {
   flex: 1;
   max-height: none;
   gap: 0;
   overflow-y: auto;
+}
+
+.labels-rail .ai-labels__section-h {
+  padding: 10px 16px 4px;
+}
+
+.labels-rail .ai-labels__list {
+  gap: 0;
 }
 
 .labels-rail .ai-labels__item {
@@ -1338,9 +1346,29 @@ button:active {
   display: none;
 }
 
-.ai-labels__list {
-  max-height: 220px;
+.ai-labels__scroll {
+  max-height: 260px;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.ai-labels__section[hidden] {
+  display: none;
+}
+
+.ai-labels__section-h {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-subtle);
+  padding: 0 2px 4px;
+}
+
+.ai-labels__list {
   display: flex;
   flex-direction: column;
   gap: 4px;

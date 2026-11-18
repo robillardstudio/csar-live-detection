@@ -8,6 +8,7 @@ import {
 import { getModelId } from "../models.js";
 
 const TOAST_MS = 3200;
+const IN_VIEW_LINGER_MS = 3000;
 
 function formatAgo(ms, now) {
   const seconds = Math.max(0, Math.round((now - ms) / 1000));
@@ -45,10 +46,24 @@ export function initLiveAnnotate() {
       <button type="button" class="btn btn--secondary desktop-only" data-annotate-add-desktop>Add label</button>
     </div>
     <p class="ai-labels__hint" data-annotate-hint></p>
-    <ul class="ai-labels__list" data-annotate-list aria-label="Labels"></ul>
+    <div class="ai-labels__scroll" data-annotate-scroll>
+      <div class="ai-labels__section" data-in-view-section hidden>
+        <div class="ai-labels__section-h">In view now</div>
+        <ul class="ai-labels__list" data-annotate-in-view aria-label="In view now"></ul>
+      </div>
+      <div class="ai-labels__section" data-earlier-section hidden>
+        <div class="ai-labels__section-h">Earlier</div>
+        <ul class="ai-labels__list" data-annotate-earlier aria-label="Earlier labels"></ul>
+      </div>
+      <ul class="ai-labels__list" data-annotate-list aria-label="Labels" hidden></ul>
+    </div>
   `;
 
   const listEl = panel.querySelector("[data-annotate-list]");
+  const inViewSection = panel.querySelector("[data-in-view-section]");
+  const earlierSection = panel.querySelector("[data-earlier-section]");
+  const inViewListEl = panel.querySelector("[data-annotate-in-view]");
+  const earlierListEl = panel.querySelector("[data-annotate-earlier]");
   const hintEl = panel.querySelector("[data-annotate-hint]");
   const countEl = panel.querySelector("[data-annotate-count]");
   const desktopAddBtn = panel.querySelector("[data-annotate-add-desktop]");
@@ -126,9 +141,9 @@ export function initLiveAnnotate() {
 
   const byLabel = new Map();
   const order = [];
-  const pendingNew = [];
+  /** @type {Map<string, { label: string, score: number|null, box: object|null, lastSeen: number, rowId: number|null }>} */
+  const inView = new Map();
   let selectedLabel = null;
-  let pointerOver = false;
   let running = false;
   let frozen = false;
   let gpsFix = null;
@@ -142,44 +157,47 @@ export function initLiveAnnotate() {
   let toastTimer = null;
   let toastRowId = null;
   let undoFn = null;
-  /** @type {null | { label: string, box: object, box2d: number[], frameW: number, frameH: number, timestamp: number, prompt: string|null }} */
+  /** @type {null | { label: string, box: object, box2d: number[], frameW: number, frameH: number, timestamp: number, prompt: string|null, gpsFix: object|null }} */
   let frozenSelection = null;
+  /** Live box-tap snapshot (video keeps running). */
+  let liveSnapshot = null;
   let onSelectionChange = null;
 
   function canAnnotateLive() {
     return running || frozen;
   }
 
-  function selectionMeta(label) {
+  function activeSnapshot(label) {
     if (
       frozen &&
       frozenSelection &&
-      frozenSelection.label === label &&
-      frozenSelection.box
+      frozenSelection.label === label
     ) {
-      return {
-        box: frozenSelection.box,
-        box2d: frozenSelection.box2d,
-        frameW: frozenSelection.frameW,
-        frameH: frozenSelection.frameH,
-        timestamp: frozenSelection.timestamp,
-        prompt: frozenSelection.prompt,
-      };
+      return frozenSelection;
     }
-    return {};
+    if (liveSnapshot && liveSnapshot.label === label) {
+      return liveSnapshot;
+    }
+    return null;
   }
 
-  function isPinned() {
-    return selectedLabel != null || pointerOver;
+  function selectionMeta(label) {
+    const snap = activeSnapshot(label);
+    if (!snap?.box) {
+      return {};
+    }
+    return {
+      box: snap.box,
+      box2d: snap.box2d,
+      frameW: snap.frameW,
+      frameH: snap.frameH,
+      timestamp: snap.timestamp,
+      prompt: snap.prompt,
+    };
   }
 
-  function flushPending() {
-    if (!pendingNew.length || isPinned()) {
-      return;
-    }
-    for (const entry of pendingNew.splice(0).reverse()) {
-      order.unshift(entry);
-    }
+  function actionGpsFix(label) {
+    return activeSnapshot(label)?.gpsFix ?? gpsFix;
   }
 
   function setFabHidden(hidden) {
@@ -195,7 +213,7 @@ export function initLiveAnnotate() {
     hintEl.textContent = canAnnotateLive()
       ? frozen
         ? "Frozen Look — tap a box or label to Add / Replace / Delete."
-        : ""
+        : "Tap a box or label to Add / Replace / Delete."
       : "Detection is off, so labels you add now are saved without a frame.";
     hintEl.hidden = !hintEl.textContent;
     countEl.textContent = `· ${order.length}`;
@@ -203,6 +221,27 @@ export function initLiveAnnotate() {
     if (labelCount) {
       labelCount.textContent = String(order.length);
     }
+  }
+
+  function pruneInView(now = Date.now()) {
+    for (const [label, entry] of inView) {
+      if (now - entry.lastSeen > IN_VIEW_LINGER_MS) {
+        inView.delete(label);
+      }
+    }
+  }
+
+  function inViewEntries(now = Date.now()) {
+    pruneInView(now);
+    return [...inView.values()].sort((a, b) => b.lastSeen - a.lastSeen);
+  }
+
+  function earlierEntries(now = Date.now()) {
+    const active = new Set(inViewEntries(now).map((entry) => entry.label));
+    return order
+      .filter((entry) => !active.has(entry.label))
+      .slice()
+      .sort((a, b) => b.lastSeen - a.lastSeen);
   }
 
   function resolveRef(label) {
@@ -355,9 +394,10 @@ export function initLiveAnnotate() {
     return item;
   }
 
-  function updateLabelItem(item, entry, now) {
+  function updateLabelItem(item, entry, now, { inViewNow = false } = {}) {
     const selected = entry.label === selectedLabel;
     item.classList.toggle("ai-labels__item--selected", selected);
+    item.classList.toggle("ai-labels__item--in-view", inViewNow);
     item.setAttribute("aria-expanded", String(selected));
 
     item.replaceChildren();
@@ -369,12 +409,19 @@ export function initLiveAnnotate() {
     const count = document.createElement("span");
     count.className = "ai-labels__count mono";
     count.dataset.count = entry.label;
-    count.textContent = String(entry.count);
+    const history = byLabel.get(entry.label);
+    count.textContent = String(history?.count ?? entry.count ?? 1);
     r1.append(name, count);
 
     const meta = document.createElement("div");
     meta.className = "ai-labels__meta";
-    meta.textContent = `Last seen ${formatAgo(entry.lastSeen, now)}`;
+    if (inViewNow) {
+      const age = Math.max(0, now - entry.lastSeen);
+      meta.textContent =
+        age < 800 ? "Now" : `In view · ${formatAgo(entry.lastSeen, now)}`;
+    } else {
+      meta.textContent = `Last seen ${formatAgo(entry.lastSeen, now)}`;
+    }
 
     item.append(r1, meta);
 
@@ -400,30 +447,49 @@ export function initLiveAnnotate() {
     }
   }
 
-  function renderList(now = Date.now()) {
-    flushPending();
-    const pinned = isPinned();
-    const nodes = [...listEl.querySelectorAll("[data-label]")];
+  function fillList(list, entries, now, inViewNow) {
+    const nodes = [...list.querySelectorAll("[data-label]")];
     const byNode = new Map(nodes.map((node) => [node.dataset.label, node]));
-
-    if (!pinned) {
-      listEl.replaceChildren(
-        ...order.map((entry) => {
-          const existing = byNode.get(entry.label);
-          if (existing) {
-            updateLabelItem(existing, entry, now);
-            return existing;
-          }
-          return createLabelItem(entry, now);
-        }),
-      );
-    } else {
-      for (const entry of order) {
+    list.replaceChildren(
+      ...entries.map((entry) => {
         const existing = byNode.get(entry.label);
         if (existing) {
-          updateLabelItem(existing, entry, now);
+          updateLabelItem(existing, entry, now, { inViewNow });
+          return existing;
         }
+        const item = createLabelItem(entry, now);
+        updateLabelItem(item, entry, now, { inViewNow });
+        return item;
+      }),
+    );
+  }
+
+  function renderList(now = Date.now()) {
+    const current = inViewEntries(now);
+    const earlier = earlierEntries(now);
+    const split = current.length > 0 || earlier.length > 0;
+
+    if (split) {
+      listEl.hidden = true;
+      inViewSection.hidden = current.length === 0;
+      earlierSection.hidden = earlier.length === 0;
+      if (current.length) {
+        fillList(inViewListEl, current, now, true);
+      } else {
+        inViewListEl.replaceChildren();
       }
+      if (earlier.length) {
+        fillList(earlierListEl, earlier, now, false);
+      } else {
+        earlierListEl.replaceChildren();
+      }
+    } else {
+      inViewSection.hidden = true;
+      earlierSection.hidden = true;
+      inViewListEl.replaceChildren();
+      earlierListEl.replaceChildren();
+      listEl.hidden = false;
+      fillList(listEl, order.slice().sort((a, b) => b.lastSeen - a.lastSeen), now, false);
     }
     syncHint();
   }
@@ -450,7 +516,7 @@ export function initLiveAnnotate() {
         label: selected,
         refersToLabel,
         refersToRow,
-        gpsFix,
+        gpsFix: actionGpsFix(selected),
         orientation,
         modelId: getModelId(),
         backend,
@@ -479,7 +545,7 @@ export function initLiveAnnotate() {
         label: "",
         refersToLabel,
         refersToRow,
-        gpsFix,
+        gpsFix: actionGpsFix(selected),
         orientation,
         modelId: getModelId(),
         backend,
@@ -489,7 +555,9 @@ export function initLiveAnnotate() {
         order.splice(index, 1);
         byLabel.delete(selected);
       }
+      inView.delete(selected);
       selectedLabel = null;
+      liveSnapshot = null;
       if (frozen && frozenSelection) {
         frozenSelection = { ...frozenSelection, label: null };
       }
@@ -519,7 +587,7 @@ export function initLiveAnnotate() {
         label: labelText,
         refersToLabel,
         refersToRow,
-        gpsFix,
+        gpsFix: actionGpsFix(selected),
         orientation,
         modelId: getModelId(),
         backend,
@@ -532,6 +600,14 @@ export function initLiveAnnotate() {
         entry.lastSeen = Date.now();
         byLabel.set(labelText, entry);
         selectedLabel = labelText;
+        if (inView.has(selected)) {
+          const view = inView.get(selected);
+          inView.delete(selected);
+          inView.set(labelText, { ...view, label: labelText });
+        }
+        if (liveSnapshot?.label === selected) {
+          liveSnapshot = { ...liveSnapshot, label: labelText };
+        }
         if (frozenSelection?.label === selected) {
           frozenSelection = { ...frozenSelection, label: labelText };
         }
@@ -549,7 +625,7 @@ export function initLiveAnnotate() {
       label: labelText,
       refersToLabel: null,
       refersToRow: null,
-      gpsFix,
+      gpsFix: actionGpsFix(selectedLabel),
       orientation,
       modelId: getModelId(),
       backend,
@@ -580,15 +656,23 @@ export function initLiveAnnotate() {
   }
 
   function noteLiveLabels(items) {
-    if (!items?.length) {
-      return;
-    }
     const now = Date.now();
-    for (const item of items) {
+    for (const item of items ?? []) {
       const label = String(item.label ?? "").trim();
       if (!label) {
         continue;
       }
+      inView.set(label, {
+        label,
+        score: item.score ?? null,
+        box: item.box ?? null,
+        frameW: item.frameW ?? null,
+        frameH: item.frameH ?? null,
+        lastSeen: now,
+        rowId: item.rowId ?? null,
+        count: byLabel.get(label)?.count ?? 1,
+      });
+
       let entry = byLabel.get(label);
       if (entry) {
         entry.count += 1;
@@ -604,12 +688,23 @@ export function initLiveAnnotate() {
           latestRowId: item.rowId ?? null,
         };
         byLabel.set(label, entry);
-        if (isPinned()) {
-          pendingNew.push(entry);
-        } else {
-          order.unshift(entry);
-        }
+        order.unshift(entry);
       }
+    }
+
+    // Keep lingering in-view items that left this frame for IN_VIEW_LINGER_MS.
+    pruneInView(now);
+    if (
+      selectedLabel &&
+      liveSnapshot?.label === selectedLabel &&
+      inView.has(selectedLabel) &&
+      !liveSnapshot.locked
+    ) {
+      const view = inView.get(selectedLabel);
+      liveSnapshot = {
+        ...liveSnapshot,
+        box: view.box ?? liveSnapshot.box,
+      };
     }
     renderList(now);
   }
@@ -663,11 +758,14 @@ export function initLiveAnnotate() {
   function resetLabels() {
     byLabel.clear();
     order.length = 0;
-    pendingNew.length = 0;
+    inView.clear();
     selectedLabel = null;
     frozenSelection = null;
+    liveSnapshot = null;
     suggestions = [];
     listEl.replaceChildren();
+    inViewListEl.replaceChildren();
+    earlierListEl.replaceChildren();
     hideToast(true);
     closeSheet();
     syncHint();
@@ -677,15 +775,7 @@ export function initLiveAnnotate() {
     showToast(message);
   }
 
-  listEl.addEventListener("pointerenter", () => {
-    pointerOver = true;
-  });
-  listEl.addEventListener("pointerleave", () => {
-    pointerOver = false;
-    renderList();
-  });
-
-  listEl.addEventListener("click", (event) => {
+  function handleListClick(event) {
     const act = event.target.closest("[data-act]");
     if (act) {
       event.preventDefault();
@@ -715,15 +805,31 @@ export function initLiveAnnotate() {
     if (!item) {
       return;
     }
+    const label = item.dataset.label;
+    if (selectedLabel === label) {
+      selectLabel(null);
+      return;
+    }
+    const view = inView.get(label);
     selectLabel(
-      selectedLabel === item.dataset.label ? null : item.dataset.label,
+      label,
+      view
+        ? {
+            box: view.box,
+            frameW: view.frameW,
+            frameH: view.frameH,
+            timestamp: Date.now(),
+            gpsFix,
+            locked: true,
+          }
+        : { gpsFix, locked: true, timestamp: Date.now() },
     );
-  });
+  }
 
   function selectLabel(label, meta = null) {
     selectedLabel = label || null;
     if (meta && selectedLabel) {
-      frozenSelection = {
+      const snap = {
         label: selectedLabel,
         box: meta.box ?? null,
         box2d: meta.box2d ?? null,
@@ -731,12 +837,20 @@ export function initLiveAnnotate() {
         frameH: meta.frameH ?? null,
         timestamp: meta.timestamp ?? Date.now(),
         prompt: meta.prompt ?? null,
+        gpsFix: meta.gpsFix ?? gpsFix,
+        locked: meta.locked !== false,
       };
+      if (frozen) {
+        frozenSelection = { ...(frozenSelection || {}), ...snap };
+      } else {
+        liveSnapshot = snap;
+      }
     } else if (!selectedLabel) {
+      liveSnapshot = null;
       if (frozenSelection) {
         frozenSelection = { ...frozenSelection, label: null };
       }
-    } else if (frozenSelection?.detections) {
+    } else if (frozen && frozenSelection?.detections) {
       const hit = frozenSelection.detections.find(
         (item) => item.label === selectedLabel,
       );
@@ -748,20 +862,36 @@ export function initLiveAnnotate() {
           box2d: hit.box2d,
         };
       }
+    } else if (!frozen && inView.has(selectedLabel) && !liveSnapshot) {
+      const view = inView.get(selectedLabel);
+      liveSnapshot = {
+        label: selectedLabel,
+        box: view.box,
+        box2d: null,
+        frameW: view.frameW,
+        frameH: view.frameH,
+        timestamp: Date.now(),
+        prompt: null,
+        gpsFix,
+        locked: true,
+      };
     }
     onSelectionChange?.(selectedLabel);
     renderList();
   }
 
-  listEl.addEventListener("keydown", (event) => {
-    if (
-      (event.key === "Enter" || event.key === " ") &&
-      event.target.matches(".ai-labels__item")
-    ) {
-      event.preventDefault();
-      event.target.click();
-    }
-  });
+  for (const list of [listEl, inViewListEl, earlierListEl]) {
+    list.addEventListener("click", handleListClick);
+    list.addEventListener("keydown", (event) => {
+      if (
+        (event.key === "Enter" || event.key === " ") &&
+        event.target.matches(".ai-labels__item")
+      ) {
+        event.preventDefault();
+        event.target.click();
+      }
+    });
+  }
 
   fab?.addEventListener("click", openAddFlow);
   desktopAddBtn?.addEventListener("click", openAddFlow);
@@ -816,10 +946,10 @@ export function initLiveAnnotate() {
 
   syncHint();
   setInterval(() => {
-    if (order.length) {
+    if (order.length || inView.size) {
       renderList();
     }
-  }, 1000);
+  }, 500);
 
   onLiveDetectionLogCleared(resetLabels);
 
@@ -831,5 +961,6 @@ export function initLiveAnnotate() {
     showStatusToast,
     resetLabels,
     getLabelCount: () => order.length,
+    getSelectedLabel: () => selectedLabel,
   };
 }

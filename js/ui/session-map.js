@@ -101,10 +101,21 @@ function isValidCoordinate(lat, lon) {
   );
 }
 
+function isGoodGpsRow(row) {
+  if (row.gps_quality === "low") {
+    return false;
+  }
+  if (row.gps_quality === "good") {
+    return true;
+  }
+  const accuracy = Number(row.gps_accuracy);
+  return !Number.isFinite(accuracy) || accuracy <= 25;
+}
+
 function extractPath(rows) {
   const fixes = [];
   rows.forEach((row, index) => {
-    if (row.lat == null || row.lon == null) {
+    if (row.lat == null || row.lon == null || !isGoodGpsRow(row)) {
       return;
     }
     const lat = Number(row.lat);

@@ -83,9 +83,9 @@ const ROLLING_WINDOW = 30;
 const MAX_INFERENCE_EDGE = 640;
 const STILL_MOVE_M = 3;
 const HEARTBEAT_MS = 10_000;
-// All models: skip logging a label if the same label was logged within 20 s and 15 m.
-const LABEL_PLACE_COOLDOWN_MS = 20_000;
+// Per recording: skip a label already logged within max(15 m, current gps_accuracy).
 const LABEL_PLACE_RADIUS_M = 15;
+const GPS_GOOD_ACCURACY_M = 25;
 
 // Coarse-pointer devices (iPad etc.) wait ~700ms between completed inferences so memory can release.
 // Desktop stays uncapped unless Analyses/sec is set (MobileNet default 2; detectors default Max).
@@ -345,7 +345,9 @@ export function initLiveDetectionPage(annotate = null) {
   let lastLogThumb = null;
   let lastLogGps = null;
   let lastLogAt = 0;
-  // label → [{ lat, lon, at }] recent place logs for cooldown dedupe.
+  let lastGoodGpsFix = null;
+  let lastLiveDetections = [];
+  // Per recording: label → [{ lat, lon }] place logs (no time expiry).
   const labelPlaceLog = new Map();
   const stillIndicators = [
     document.getElementById("still-indicator"),
@@ -360,35 +362,26 @@ export function initLiveDetectionPage(annotate = null) {
     }
   }
 
-  function pruneLabelPlaceLog(now) {
-    for (const [label, entries] of labelPlaceLog) {
-      const kept = entries.filter(
-        (entry) => now - entry.at <= LABEL_PLACE_COOLDOWN_MS,
-      );
-      if (kept.length) {
-        labelPlaceLog.set(label, kept);
-      } else {
-        labelPlaceLog.delete(label);
-      }
+  function placeRadiusM(gpsFix) {
+    const accuracy = Number(gpsFix?.accuracy);
+    if (!Number.isFinite(accuracy) || accuracy <= 0) {
+      return LABEL_PLACE_RADIUS_M;
     }
+    return Math.max(LABEL_PLACE_RADIUS_M, accuracy);
   }
 
-  function wasLoggedNearRecently(label, gpsFix, now) {
+  function wasLoggedNearPlace(label, gpsFix) {
     const entries = labelPlaceLog.get(label);
     if (!entries?.length) {
       return false;
     }
+    const radius = placeRadiusM(gpsFix);
     for (const entry of entries) {
-      if (now - entry.at > LABEL_PLACE_COOLDOWN_MS) {
-        continue;
-      }
-      // No GPS: treat same label within the time window as same place.
       if (gpsFix?.lat == null || gpsFix?.lon == null || entry.lat == null) {
         return true;
       }
       if (
-        distanceMeters(gpsFix, { lat: entry.lat, lon: entry.lon }) <=
-        LABEL_PLACE_RADIUS_M
+        distanceMeters(gpsFix, { lat: entry.lat, lon: entry.lon }) <= radius
       ) {
         return true;
       }
@@ -396,7 +389,7 @@ export function initLiveDetectionPage(annotate = null) {
     return false;
   }
 
-  function rememberLabelPlaces(detections, gpsFix, now) {
+  function rememberLabelPlaces(detections, gpsFix) {
     for (const detection of detections) {
       const label = String(detection.label ?? "").trim();
       if (!label) {
@@ -408,9 +401,36 @@ export function initLiveDetectionPage(annotate = null) {
       labelPlaceLog.get(label).push({
         lat: gpsFix?.lat ?? null,
         lon: gpsFix?.lon ?? null,
-        at: now,
       });
     }
+  }
+
+  function resolveGpsForLog(rawFix) {
+    if (!rawFix || rawFix.lat == null || rawFix.lon == null) {
+      return { fix: rawFix ?? null, gpsQuality: null };
+    }
+    const accuracy = Number(rawFix.accuracy);
+    if (Number.isFinite(accuracy) && accuracy <= GPS_GOOD_ACCURACY_M) {
+      lastGoodGpsFix = {
+        lat: rawFix.lat,
+        lon: rawFix.lon,
+        accuracy: rawFix.accuracy,
+        timestamp: rawFix.timestamp,
+      };
+      return { fix: rawFix, gpsQuality: "good" };
+    }
+    if (lastGoodGpsFix) {
+      return {
+        fix: {
+          lat: lastGoodGpsFix.lat,
+          lon: lastGoodGpsFix.lon,
+          accuracy: rawFix.accuracy,
+          timestamp: rawFix.timestamp,
+        },
+        gpsQuality: "low",
+      };
+    }
+    return { fix: rawFix, gpsQuality: "low" };
   }
 
   function markLoggedFrame(thumb, gpsFix, at) {
@@ -427,6 +447,28 @@ export function initLiveDetectionPage(annotate = null) {
     setStillPaused(false);
   }
 
+  function resetRecordingPlaceLog() {
+    labelPlaceLog.clear();
+  }
+
+  function selectLiveDetection(label, detection, timestamp, gpsSnap) {
+    if (!label) {
+      annotate?.selectLabel?.(null);
+      setSelectedBoundingBox(mediaWrap, null);
+      return;
+    }
+    annotate?.selectLabel?.(label, {
+      box: detection?.box ?? null,
+      box2d: detection?.box2d ?? null,
+      frameW,
+      frameH,
+      timestamp: timestamp ?? Date.now(),
+      gpsFix: gpsSnap ?? gpsFix,
+      locked: true,
+    });
+    setSelectedBoundingBox(mediaWrap, label);
+  }
+
   function logDetectionsIfNeeded(
     detections,
     {
@@ -438,6 +480,7 @@ export function initLiveDetectionPage(annotate = null) {
       generation,
       isStill,
       needsHeartbeat,
+      gpsQuality = null,
     },
   ) {
     // Row ids aligned with `detections` (null when skipped / not recording).
@@ -450,7 +493,6 @@ export function initLiveDetectionPage(annotate = null) {
       return aligned;
     }
 
-    pruneLabelPlaceLog(now);
     const toLog = [];
     const toLogIndexes = [];
     const queuedLabels = new Set();
@@ -460,7 +502,7 @@ export function initLiveDetectionPage(annotate = null) {
       if (
         !label ||
         queuedLabels.has(label) ||
-        wasLoggedNearRecently(label, gpsFix, now)
+        wasLoggedNearPlace(label, gpsFix)
       ) {
         continue;
       }
@@ -486,11 +528,12 @@ export function initLiveDetectionPage(annotate = null) {
       orientation,
       backend: backendInfo,
       modelId: getModelId(),
+      gpsQuality,
     });
     for (let i = 0; i < logged.length; i += 1) {
       aligned[toLogIndexes[i]] = logged[i];
     }
-    rememberLabelPlaces(toLog, gpsFix, now);
+    rememberLabelPlaces(toLog, gpsFix);
     markLoggedFrame(thumb, gpsFix, now);
     return aligned;
   }
@@ -832,8 +875,9 @@ export function initLiveDetectionPage(annotate = null) {
       frameH = height;
 
       renderBoundingBoxesOnContainer(mediaWrap, detections, freezeCanvas, {
-        onSelectLabel: (label) => {
-          const hit = lookDetections.find((item) => item.label === label);
+        onSelectLabel: (label, detection) => {
+          const hit =
+            detection ?? lookDetections.find((item) => item.label === label);
           annotate?.selectLabel?.(label, hit
             ? {
                 box: hit.box,
@@ -842,29 +886,37 @@ export function initLiveDetectionPage(annotate = null) {
                 frameH: height,
                 timestamp: lookTimestamp,
                 prompt: lookPrompt,
+                gpsFix,
+                locked: true,
               }
             : null);
           setSelectedBoundingBox(mediaWrap, label);
         },
       });
 
+      const { fix: lookGps, gpsQuality: lookGpsQuality } = resolveGpsForLog(gpsFix);
       const logged = logDetectionFrame({
         detections,
         frameW: width,
         frameH: height,
         inferenceMs,
         timestamp: lookTimestamp,
-        gpsFix,
+        gpsFix: lookGps,
         orientation: compass?.getReading() ?? null,
         backend: backendInfo ?? { device: "gemini", dtype: "api" },
         modelId: geminiModelLogId(),
         prompt: lookPrompt,
         forceLog: true,
+        gpsQuality: lookGpsQuality,
       });
 
       annotate?.noteLiveLabels(
         detections.map((item, index) => ({
           label: item.label,
+          score: item.score,
+          box: item.box,
+          frameW: width,
+          frameH: height,
           rowId: logged[index]?.id ?? null,
         })),
       );
@@ -1125,7 +1177,8 @@ export function initLiveDetectionPage(annotate = null) {
     frameCtx.drawImage(video, 0, 0, frameW, frameH);
     // Captured with the frame, not after inference: heading changes faster than GPS.
     const orientation = compass?.getReading() ?? null;
-    const gpsNow = gps?.getFix() ?? null;
+    const rawGps = gps?.getFix() ?? null;
+    const { fix: gpsNow, gpsQuality } = resolveGpsForLog(rawGps);
     // A frame grabbed before the log is cleared is not logged after it.
     const generation = logGeneration;
 
@@ -1183,10 +1236,16 @@ export function initLiveDetectionPage(annotate = null) {
           generation,
           isStill,
           needsHeartbeat,
+          gpsQuality,
         });
+        lastLiveDetections = classDetections;
         annotate?.noteLiveLabels(
           classDetections.map((item, index) => ({
             label: item.label,
+            score: item.score,
+            box: null,
+            frameW,
+            frameH,
             rowId: classLogged[index]?.id ?? null,
           })),
         );
@@ -1221,8 +1280,17 @@ export function initLiveDetectionPage(annotate = null) {
             estLon: estimate?.lon ?? null,
           };
         });
+        lastLiveDetections = detections;
         renderClassificationReadout(null);
-        renderBoundingBoxesOnContainer(mediaWrap, detections, frameCanvas);
+        renderBoundingBoxesOnContainer(mediaWrap, detections, frameCanvas, {
+          onSelectLabel: (label, detection) => {
+            selectLiveDetection(label, detection, now, gpsNow);
+          },
+        });
+        const selected = annotate?.getSelectedLabel?.() ?? null;
+        if (selected) {
+          setSelectedBoundingBox(mediaWrap, selected);
+        }
 
         const logged = logDetectionsIfNeeded(detections, {
           thumb,
@@ -1233,10 +1301,15 @@ export function initLiveDetectionPage(annotate = null) {
           generation,
           isStill,
           needsHeartbeat,
+          gpsQuality,
         });
         annotate?.noteLiveLabels(
           detections.map((item, index) => ({
             label: item.label,
+            score: item.score,
+            box: item.box,
+            frameW,
+            frameH,
             rowId: logged[index]?.id ?? null,
           })),
         );
@@ -1324,6 +1397,7 @@ export function initLiveDetectionPage(annotate = null) {
       if (recordArmed && !isRecording) {
         isRecording = true;
         recordingStartedAt = Date.now();
+        resetRecordingPlaceLog();
         startRecording(getModelId());
       }
       updateControls();
@@ -1461,6 +1535,7 @@ export function initLiveDetectionPage(annotate = null) {
     isRecording = !isRecording;
     if (isRecording) {
       recordingStartedAt = Date.now();
+      resetRecordingPlaceLog();
       startRecording(getModelId());
     } else {
       stopRecording();
@@ -1475,6 +1550,7 @@ export function initLiveDetectionPage(annotate = null) {
       isRecording = !isRecording;
       if (isRecording) {
         recordingStartedAt = Date.now();
+        resetRecordingPlaceLog();
         startRecording(getModelId());
       } else {
         stopRecording();

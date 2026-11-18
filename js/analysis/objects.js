@@ -116,10 +116,10 @@ function drawBoundingBoxes(container, results, dimensionSource) {
   layer.style.right = "auto";
   layer.style.bottom = "auto";
 
-  for (const result of results) {
+  results.forEach((result, index) => {
     const percentBox = boxToPercentages(result.box, image);
     if (!percentBox) {
-      continue;
+      return;
     }
 
     const color = getLabelColor(result.label);
@@ -149,6 +149,7 @@ function drawBoundingBoxes(container, results, dimensionSource) {
     labelEl.style.backgroundColor = color;
 
     boxEl.dataset.label = result.label;
+    boxEl.dataset.index = String(index);
     boxEl.setAttribute("role", "button");
     boxEl.tabIndex = 0;
     boxEl.setAttribute("aria-pressed", "false");
@@ -159,7 +160,7 @@ function drawBoundingBoxes(container, results, dimensionSource) {
 
     boxEl.appendChild(labelEl);
     layer.appendChild(boxEl);
-  }
+  });
 
   container.appendChild(layer);
 }
@@ -198,7 +199,10 @@ export function renderBoundingBoxesOnContainer(
       if (!box || !layer.contains(box)) {
         return;
       }
-      onSelectLabel(box.dataset.label);
+      const index = Number(box.dataset.index);
+      const detection =
+        Number.isInteger(index) && results[index] ? results[index] : null;
+      onSelectLabel(box.dataset.label, detection);
     });
   }
 }
