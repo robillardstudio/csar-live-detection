@@ -192,6 +192,7 @@ export function logUserAction({
     label: action === "delete" ? "" : trimmed,
     confidence: null,
     rank: null,
+    count_in_view: null,
     bbox: hasBox
       ? {
           xmin: box.xmin,
@@ -333,6 +334,11 @@ export function logDetectionFrame({
       label: detection.label,
       confidence: detection.score,
       rank: detection.rank ?? null,
+      count_in_view:
+        detection.countInView == null ||
+        Number.isNaN(Number(detection.countInView))
+          ? null
+          : Number(detection.countInView),
       bbox: hasBox
         ? {
             xmin: detection.box.xmin,

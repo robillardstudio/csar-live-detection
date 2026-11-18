@@ -32,6 +32,7 @@ const CSV_HEADERS = [
   "label",
   "confidence",
   "rank",
+  "count_in_view",
   "bbox_xmin",
   "bbox_ymin",
   "bbox_xmax",
@@ -99,6 +100,7 @@ function rowToCsvLine(row) {
       ? ""
       : Number(row.confidence).toFixed(3),
     row.rank ?? "",
+    row.count_in_view ?? "",
     row.bbox?.xmin ?? "",
     row.bbox?.ymin ?? "",
     row.bbox?.xmax ?? "",

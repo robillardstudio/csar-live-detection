@@ -247,8 +247,12 @@ export function initLiveAnnotate() {
 
   function resolveRef(label) {
     const entry = byLabel.get(label);
+    const snap = activeSnapshot(label);
     const refersToRow =
-      entry?.latestRowId ?? findLatestAiRowForLabel(label)?.id ?? null;
+      snap?.rowId ??
+      entry?.latestRowId ??
+      findLatestAiRowForLabel(label)?.id ??
+      null;
     return { refersToLabel: label, refersToRow };
   }
 
@@ -850,6 +854,7 @@ export function initLiveAnnotate() {
         prompt: meta.prompt ?? null,
         gpsFix: meta.gpsFix ?? gpsFix,
         locked: meta.locked !== false,
+        rowId: meta.rowId ?? null,
       };
       if (frozen) {
         frozenSelection = { ...(frozenSelection || {}), ...snap };

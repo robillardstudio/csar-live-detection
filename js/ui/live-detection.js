@@ -86,6 +86,7 @@ const HEARTBEAT_MS = 10_000;
 // Per recording: skip a label already logged within max(15 m, current gps_accuracy).
 const LABEL_PLACE_RADIUS_M = 15;
 const GPS_GOOD_ACCURACY_M = 25;
+const COUNT_IN_VIEW_WINDOW_MS = 2000;
 
 // Coarse-pointer devices (iPad etc.) wait ~700ms between completed inferences so memory can release.
 // Desktop stays uncapped unless Analyses/sec is set (MobileNet default 2; detectors default Max).
@@ -349,6 +350,8 @@ export function initLiveDetectionPage(annotate = null) {
   let lastLiveDetections = [];
   // Per recording: label → [{ lat, lon }] place logs (no time expiry).
   const labelPlaceLog = new Map();
+  // Recent per-frame label counts for count_in_view (max in any frame in last 2 s).
+  const recentFrameCounts = [];
   const stillIndicators = [
     document.getElementById("still-indicator"),
     document.querySelector("[data-still-sidebar]"),
@@ -405,6 +408,46 @@ export function initLiveDetectionPage(annotate = null) {
     }
   }
 
+  function noteFrameLabelCounts(detections, now) {
+    const byLabel = new Map();
+    for (const detection of detections) {
+      const label = String(detection.label ?? "").trim();
+      if (!label) {
+        continue;
+      }
+      byLabel.set(label, (byLabel.get(label) ?? 0) + 1);
+    }
+    recentFrameCounts.push({ at: now, byLabel });
+    while (
+      recentFrameCounts.length &&
+      now - recentFrameCounts[0].at > COUNT_IN_VIEW_WINDOW_MS
+    ) {
+      recentFrameCounts.shift();
+    }
+  }
+
+  function maxCountInView(label, now = Date.now()) {
+    const needle = String(label ?? "").trim();
+    if (!needle) {
+      return 0;
+    }
+    let max = 0;
+    for (const frame of recentFrameCounts) {
+      if (now - frame.at > COUNT_IN_VIEW_WINDOW_MS) {
+        continue;
+      }
+      max = Math.max(max, frame.byLabel.get(needle) ?? 0);
+    }
+    return max;
+  }
+
+  function withCountInView(detections, now) {
+    return detections.map((detection) => ({
+      ...detection,
+      countInView: maxCountInView(detection.label, now),
+    }));
+  }
+
   function resolveGpsForLog(rawFix) {
     if (!rawFix || rawFix.lat == null || rawFix.lon == null) {
       return { fix: rawFix ?? null, gpsQuality: null };
@@ -444,6 +487,7 @@ export function initLiveDetectionPage(annotate = null) {
     lastLogGps = null;
     lastLogAt = 0;
     labelPlaceLog.clear();
+    recentFrameCounts.length = 0;
     setStillPaused(false);
   }
 
@@ -457,14 +501,57 @@ export function initLiveDetectionPage(annotate = null) {
       setSelectedBoundingBox(mediaWrap, null);
       return;
     }
+    const tapAt = timestamp ?? Date.now();
+    const { fix: tapGps, gpsQuality: tapQuality } = resolveGpsForLog(
+      gpsSnap ?? gpsFix,
+    );
+    if (lastLiveDetections.length) {
+      noteFrameLabelCounts(lastLiveDetections, tapAt);
+    }
+    // Always log the tapped box as its own AI row (bypass place dedupe).
+    const [logged] = logDetectionFrame({
+      detections: withCountInView(
+        [
+          {
+            ...(detection ?? { label, box: null }),
+            label,
+          },
+        ],
+        tapAt,
+      ),
+      frameW,
+      frameH,
+      inferenceMs: null,
+      timestamp: tapAt,
+      gpsFix: tapGps,
+      orientation: compass?.getReading() ?? null,
+      backend: backendInfo,
+      modelId: getModelId(),
+      forceLog: true,
+      gpsQuality: tapQuality,
+    });
+    if (logged?.id != null) {
+      rememberLabelPlaces([{ label }], tapGps);
+      annotate?.noteLiveLabels?.([
+        {
+          label,
+          score: detection?.score ?? null,
+          box: detection?.box ?? null,
+          frameW,
+          frameH,
+          rowId: logged.id,
+        },
+      ]);
+    }
     annotate?.selectLabel?.(label, {
       box: detection?.box ?? null,
       box2d: detection?.box2d ?? null,
       frameW,
       frameH,
-      timestamp: timestamp ?? Date.now(),
-      gpsFix: gpsSnap ?? gpsFix,
+      timestamp: tapAt,
+      gpsFix: tapGps,
       locked: true,
+      rowId: logged?.id ?? null,
     });
     setSelectedBoundingBox(mediaWrap, label);
   }
@@ -485,6 +572,8 @@ export function initLiveDetectionPage(annotate = null) {
   ) {
     // Row ids aligned with `detections` (null when skipped / not recording).
     const aligned = detections.map(() => null);
+
+    noteFrameLabelCounts(detections, now);
 
     if (!isRecording || generation !== logGeneration) {
       if (!isStill || needsHeartbeat) {
@@ -519,7 +608,7 @@ export function initLiveDetectionPage(annotate = null) {
     }
 
     const logged = logDetectionFrame({
-      detections: toLog,
+      detections: withCountInView(toLog, now),
       frameW,
       frameH,
       inferenceMs,
@@ -874,29 +963,10 @@ export function initLiveDetectionPage(annotate = null) {
       frameW = width;
       frameH = height;
 
-      renderBoundingBoxesOnContainer(mediaWrap, detections, freezeCanvas, {
-        onSelectLabel: (label, detection) => {
-          const hit =
-            detection ?? lookDetections.find((item) => item.label === label);
-          annotate?.selectLabel?.(label, hit
-            ? {
-                box: hit.box,
-                box2d: hit.box2d,
-                frameW: width,
-                frameH: height,
-                timestamp: lookTimestamp,
-                prompt: lookPrompt,
-                gpsFix,
-                locked: true,
-              }
-            : null);
-          setSelectedBoundingBox(mediaWrap, label);
-        },
-      });
-
       const { fix: lookGps, gpsQuality: lookGpsQuality } = resolveGpsForLog(gpsFix);
+      noteFrameLabelCounts(detections, lookTimestamp);
       const logged = logDetectionFrame({
-        detections,
+        detections: withCountInView(detections, lookTimestamp),
         frameW: width,
         frameH: height,
         inferenceMs,
@@ -908,6 +978,32 @@ export function initLiveDetectionPage(annotate = null) {
         prompt: lookPrompt,
         forceLog: true,
         gpsQuality: lookGpsQuality,
+      });
+
+      renderBoundingBoxesOnContainer(mediaWrap, detections, freezeCanvas, {
+        onSelectLabel: (label, detection) => {
+          const index = Number.isInteger(Number(detection && detections.indexOf(detection)))
+            ? detections.indexOf(detection)
+            : detections.findIndex((item) => item.label === label);
+          const hit =
+            detection ?? (index >= 0 ? detections[index] : null) ??
+            lookDetections.find((item) => item.label === label);
+          const rowId = index >= 0 ? logged[index]?.id ?? null : logged.find((row) => row.label === label)?.id ?? null;
+          annotate?.selectLabel?.(label, hit
+            ? {
+                box: hit.box,
+                box2d: hit.box2d,
+                frameW: width,
+                frameH: height,
+                timestamp: lookTimestamp,
+                prompt: lookPrompt,
+                gpsFix: lookGps,
+                locked: true,
+                rowId,
+              }
+            : { rowId, locked: true, timestamp: lookTimestamp, gpsFix: lookGps });
+          setSelectedBoundingBox(mediaWrap, label);
+        },
       });
 
       annotate?.noteLiveLabels(
