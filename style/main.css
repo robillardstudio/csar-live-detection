@@ -1014,6 +1014,11 @@ button:active {
   background-color: #0b0f14;
 }
 
+/* Dark base: invert OSM tiles only — markers/path/popups live in other panes. */
+.session-map__canvas .tiles-dark {
+  filter: invert(1) hue-rotate(180deg) brightness(0.55) contrast(0.9) saturate(0.4);
+}
+
 .session-map__canvas path.map-dot--ai {
   filter: drop-shadow(0 0 4px #39e58c);
 }

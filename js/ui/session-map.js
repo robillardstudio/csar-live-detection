@@ -5,12 +5,8 @@ const LEAFLET_CSS =
   "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
 const LEAFLET_JS =
   "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
-const DARK_TILE_URL =
-  "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
-const DARK_TILE_ATTRIBUTION = "© OpenStreetMap contributors © CARTO";
-const STREET_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
-const STREET_TILE_ATTRIBUTION =
-  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+const OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+const OSM_TILE_ATTRIBUTION = "© OpenStreetMap contributors";
 const SINGLE_POINT_ZOOM = 18;
 const MAX_ZOOM = 19;
 // Below this zoom, dots are too close together for readable labels.
@@ -697,14 +693,14 @@ function drawMap(L, container, paths, snapshot, onChange) {
   const allMarkers = [...viewer.markers, ...objects.markers];
 
   const bases = {
-    dark: L.tileLayer(DARK_TILE_URL, {
+    dark: L.tileLayer(OSM_TILE_URL, {
       maxZoom: MAX_ZOOM,
-      attribution: DARK_TILE_ATTRIBUTION,
-      subdomains: "abcd",
+      attribution: OSM_TILE_ATTRIBUTION,
+      className: "tiles-dark",
     }),
-    street: L.tileLayer(STREET_TILE_URL, {
+    street: L.tileLayer(OSM_TILE_URL, {
       maxZoom: MAX_ZOOM,
-      attribution: STREET_TILE_ATTRIBUTION,
+      attribution: OSM_TILE_ATTRIBUTION,
     }),
     none: L.layerGroup(),
   };
@@ -734,8 +730,8 @@ function drawMap(L, container, paths, snapshot, onChange) {
   L.control
     .layers(
       {
-        "Dark map": bases.dark,
-        "Street map": bases.street,
+        Dark: bases.dark,
+        Street: bases.street,
         None: bases.none,
       },
       Object.fromEntries(OVERLAYS.map(([key, name]) => [name, overlays[key]])),
