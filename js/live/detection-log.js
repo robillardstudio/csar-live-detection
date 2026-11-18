@@ -117,6 +117,85 @@ export function clearLiveDetectionLog() {
   }
 }
 
+/**
+ * Append parsed CSV rows as a finished recording. Mutates row ids / refers_to_row in place.
+ * @returns {object|null} the new recording metadata
+ */
+export function importRecording({
+  rows,
+  model = null,
+  startTime = null,
+  endTime = null,
+}) {
+  if (!Array.isArray(rows) || !rows.length) {
+    return null;
+  }
+
+  const recordingId = recordings.length + 1;
+  const start = startTime ?? rows[0]?.timestamp ?? Date.now();
+  const end = endTime ?? rows.at(-1)?.timestamp ?? start;
+
+  for (const row of rows) {
+    row.id = nextRowId;
+    nextRowId += 1;
+    row.recording_id = recordingId;
+  }
+
+  // Remap refers_to_row using csv id map or prior-AI heuristic (import-live sets helpers).
+  const byOldId = new Map();
+  for (const row of rows) {
+    if (row._csv_id != null) {
+      byOldId.set(row._csv_id, row.id);
+    }
+  }
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i];
+    const raw = row._refers_to_row_raw;
+    delete row._refers_to_row_raw;
+    delete row._csv_id;
+    if (raw == null) {
+      row.refers_to_row = null;
+      continue;
+    }
+    if (byOldId.has(raw)) {
+      row.refers_to_row = byOldId.get(raw);
+      continue;
+    }
+    const needle = String(row.refers_to_label ?? "").trim();
+    let found = null;
+    if (needle) {
+      for (let j = i - 1; j >= 0; j -= 1) {
+        const prior = rows[j];
+        if (
+          prior.source !== "user" &&
+          String(prior.label ?? "").trim() === needle
+        ) {
+          found = prior.id;
+          break;
+        }
+      }
+    }
+    row.refers_to_row = found;
+  }
+
+  const recording = {
+    recording_id: recordingId,
+    start_time: start,
+    end_time: end,
+    model,
+    row_count: rows.length,
+    imported: true,
+  };
+  recordings.push(recording);
+  exportedIds.add(recordingId);
+  sessionStart ??= start;
+  for (const row of rows) {
+    log.push(row);
+  }
+  notifyLogChanged();
+  return recording;
+}
+
 function bumpRecordingRowCount(recordingId) {
   const recording =
     activeRecording?.recording_id === recordingId

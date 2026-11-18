@@ -7,6 +7,7 @@ import {
 } from "./detection-log.js";
 
 const CSV_HEADERS = [
+  "id",
   "timestamp",
   "recording_id",
   "lat",
@@ -73,6 +74,7 @@ function formatNullableNumber(value, digits) {
 
 function rowToCsvLine(row) {
   return [
+    row.id ?? "",
     row.timestamp,
     row.recording_id ?? "",
     formatNullableNumber(row.lat, 8),

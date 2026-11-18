@@ -32,6 +32,7 @@ import {
   getLiveDetectionLogCount,
   getRecordings,
   getUnexportedRecordingCount,
+  importRecording,
   logDetectionFrame,
   markRecordingsExported,
   startRecording,
@@ -41,6 +42,7 @@ import {
   exportLiveDetectionCsv,
   exportLiveDetectionJson,
 } from "../live/export-live.js";
+import { parseExportedCsv } from "../live/import-live.js";
 import {
   detectObjectsFromSource,
   renderBoundingBoxesOnContainer,
@@ -259,6 +261,8 @@ export function initLiveDetectionPage(annotate = null) {
   const recordButtonLive = document.getElementById("btn-record-live");
   const exportButton = document.getElementById("btn-export");
   const exportMenu = document.getElementById("export-menu");
+  const importButton = document.getElementById("btn-import-csv");
+  const importInput = document.getElementById("import-csv-input");
   const clearButton = document.getElementById("btn-clear-recordings");
   const changeModelBtn = document.getElementById("btn-change-model");
   const sessionModelName = document.getElementById("session-model-name");
@@ -1736,14 +1740,49 @@ export function initLiveDetectionPage(annotate = null) {
       showCameraFeedback("Could not copy coordinates");
     }
   });
-  exportButton.addEventListener("click", () => {
+  async function handleImportCsv(file) {
+    if (!file) {
+      return;
+    }
+    try {
+      const text = await file.text();
+      const parsed = parseExportedCsv(text);
+      if (!parsed) {
+        showCameraFeedback("Could not import CSV — not a valid export");
+        return;
+      }
+      const recording = importRecording(parsed);
+      if (!recording) {
+        showCameraFeedback("Could not import CSV — no rows");
+        return;
+      }
+      showCameraFeedback(
+        `Imported recording ${recording.recording_id} · ${recording.row_count} rows`,
+      );
+      updateControls();
+    } catch (error) {
+      console.error("[IMPORT] CSV failed:", error);
+      showCameraFeedback("Could not import CSV");
+    }
+  }
+
+  importButton?.addEventListener("click", () => {
+    importInput?.click();
+  });
+  importInput?.addEventListener("change", () => {
+    const file = importInput.files?.[0] ?? null;
+    importInput.value = "";
+    handleImportCsv(file);
+  });
+
+  exportButton?.addEventListener("click", () => {
     if (exportMenu.hidden) {
       openExportMenu();
     } else {
       closeExportMenu();
     }
   });
-  exportMenu.addEventListener("click", (event) => {
+  exportMenu?.addEventListener("click", (event) => {
     const item = event.target.closest("[data-export]");
     if (!item) {
       return;
@@ -1756,11 +1795,11 @@ export function initLiveDetectionPage(annotate = null) {
     handleExport(exporter);
   });
   document.addEventListener("click", (event) => {
-    if (exportMenu.hidden) {
+    if (!exportMenu || exportMenu.hidden) {
       return;
     }
     if (
-      exportButton.contains(event.target) ||
+      exportButton?.contains(event.target) ||
       exportMenu.contains(event.target)
     ) {
       return;
@@ -1768,9 +1807,9 @@ export function initLiveDetectionPage(annotate = null) {
     closeExportMenu();
   });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !exportMenu.hidden) {
+    if (event.key === "Escape" && exportMenu && !exportMenu.hidden) {
       closeExportMenu();
-      exportButton.focus();
+      exportButton?.focus();
     }
   });
   window.addEventListener("pagehide", () => {

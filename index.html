@@ -253,25 +253,26 @@
       </div>
 
       <section id="review-panel" class="review-panel hidden" aria-label="Review">
-        <p id="review-empty" class="review-panel__empty hidden">No recordings yet — switch to Live and press Start Recording.</p>
-        <div id="review-body" class="review-panel__body hidden">
-          <div class="review-toolbar review-bar">
-            <span class="eyebrow desktop-only">Review</span>
-            <select id="review-recording" class="model-picker review-picker select" aria-label="Recording"></select>
-            <div class="spacer desktop-only" aria-hidden="true"></div>
-            <div id="review-tabs" class="segmented review-tabs" role="tablist" aria-label="Review views">
-              <button type="button" id="tab-summary" class="segmented__option" role="tab" data-review-tab="summary" aria-selected="false" aria-controls="session-summary" tabindex="-1">Summary</button>
-              <button type="button" id="tab-map" class="segmented__option" role="tab" data-review-tab="map" aria-selected="true" aria-controls="session-map">Map</button>
-            </div>
-            <div class="export-menu hidden" data-show-in="review">
-              <button type="button" id="btn-export" class="btn btn--outline export-menu__trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="export-menu">Export</button>
-              <div id="export-menu" class="export-menu__list" role="menu" hidden>
-                <button type="button" class="export-menu__item" role="menuitem" data-export="csv">CSV</button>
-                <button type="button" class="export-menu__item" role="menuitem" data-export="json">JSON</button>
-              </div>
+        <div class="review-toolbar review-bar">
+          <span class="eyebrow desktop-only">Review</span>
+          <select id="review-recording" class="model-picker review-picker select" aria-label="Recording" hidden></select>
+          <div class="spacer desktop-only" aria-hidden="true"></div>
+          <div id="review-tabs" class="segmented review-tabs" role="tablist" aria-label="Review views" hidden>
+            <button type="button" id="tab-summary" class="segmented__option" role="tab" data-review-tab="summary" aria-selected="false" aria-controls="session-summary" tabindex="-1">Summary</button>
+            <button type="button" id="tab-map" class="segmented__option" role="tab" data-review-tab="map" aria-selected="true" aria-controls="session-map">Map</button>
+          </div>
+          <div class="export-menu">
+            <button type="button" id="btn-import-csv" class="btn btn--outline">Import CSV</button>
+            <input type="file" id="import-csv-input" accept=".csv,text/csv" hidden>
+            <button type="button" id="btn-export" class="btn btn--outline export-menu__trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="export-menu" hidden>Export</button>
+            <div id="export-menu" class="export-menu__list" role="menu" hidden>
+              <button type="button" class="export-menu__item" role="menuitem" data-export="csv">CSV</button>
+              <button type="button" class="export-menu__item" role="menuitem" data-export="json">JSON</button>
             </div>
           </div>
-
+        </div>
+        <p id="review-empty" class="review-panel__empty hidden">No recordings yet — Import CSV, or switch to Live and press Start Recording.</p>
+        <div id="review-body" class="review-panel__body hidden">
           <section id="session-map" class="session-map" role="tabpanel" aria-labelledby="tab-map">
             <div id="map-label-view" class="segmented map-label-view" role="group" aria-label="Label view">
               <button type="button" class="segmented__option" data-label-view="recorded" aria-pressed="false">As recorded</button>

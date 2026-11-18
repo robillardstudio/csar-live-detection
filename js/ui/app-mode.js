@@ -142,6 +142,12 @@ export function initAppMode(views) {
     const hasRecordings = snapshot.recordings.length > 0;
     reviewEmpty.classList.toggle("hidden", hasRecordings);
     reviewBody.classList.toggle("hidden", !hasRecordings);
+    picker.hidden = !hasRecordings;
+    tablist.hidden = !hasRecordings;
+    const exportBtn = document.getElementById("btn-export");
+    if (exportBtn) {
+      exportBtn.hidden = !hasRecordings;
+    }
     if (!hasRecordings) {
       selectedRecording = null;
       picker.replaceChildren();

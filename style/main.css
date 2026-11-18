@@ -357,6 +357,13 @@ button:active {
   background-color: transparent;
 }
 
+.export-menu {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+}
+
 .export-menu__trigger::after {
   content: "";
   width: 7px;
