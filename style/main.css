@@ -178,8 +178,10 @@ button:active {
   left: 0;
   right: 0;
   z-index: 100;
+  box-sizing: border-box;
   height: var(--nav-height);
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 14px;
   padding: 0 16px 0 20px;
@@ -362,6 +364,26 @@ button:active {
   align-items: center;
   gap: 8px;
   position: relative;
+  flex-shrink: 0;
+}
+
+.review-actions {
+  margin-left: auto;
+}
+
+.review-clear {
+  white-space: nowrap;
+}
+
+.review-more {
+  display: none;
+  position: relative;
+}
+
+.review-more__trigger {
+  min-width: 36px;
+  padding-inline: 10px;
+  letter-spacing: 0.08em;
 }
 
 .export-menu__trigger::after {
@@ -403,6 +425,12 @@ button:active {
 .export-menu__item:hover,
 .export-menu__item:focus-visible {
   background-color: var(--color-btn-hover);
+}
+
+.export-menu__item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: transparent;
 }
 
 /* --------------------------------------------------------------------------
@@ -1852,24 +1880,49 @@ button:active {
   }
 
   .top-nav {
-    flex-wrap: wrap;
-    align-content: center;
-    row-gap: 8px;
-    padding: 8px 12px;
-    height: auto;
-    min-height: var(--nav-height);
+    flex-wrap: nowrap;
+    padding: 0 12px;
+    height: var(--nav-height);
     background: var(--surface-2);
     border-bottom: 1px solid var(--line);
   }
 
   .top-nav__start {
-    width: 100%;
+    width: auto;
+    flex: 1;
+    min-width: 0;
     justify-content: space-between;
   }
 
   .top-nav__title {
     font-size: 17px;
     font-weight: 600;
+  }
+
+  /* Narrow Review toolbar: tuck Clear into ⋯ so Import/Export stay visible. */
+  .review-toolbar,
+  .review-bar {
+    flex-wrap: nowrap;
+    gap: 8px;
+    padding-bottom: 10px;
+  }
+
+  .review-clear {
+    display: none;
+  }
+
+  .review-more {
+    display: block;
+  }
+
+  .review-actions .btn {
+    font-size: 13px;
+    padding-inline: 10px;
+  }
+
+  .review-picker {
+    max-width: min(140px, 36vw);
+    min-width: 0;
   }
 
   .segmented {

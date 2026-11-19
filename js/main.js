@@ -8,7 +8,27 @@ import { initSessionMap } from "./ui/session-map.js";
 import { initAppMode } from "./ui/app-mode.js";
 import { initDetailsSheet } from "./ui/details-sheet.js";
 
+function syncNavHeight() {
+  const nav = document.querySelector(".top-nav");
+  if (!nav) {
+    return;
+  }
+  const height = Math.ceil(nav.getBoundingClientRect().height);
+  if (height > 0) {
+    document.documentElement.style.setProperty("--nav-height", `${height}px`);
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  syncNavHeight();
+  window.addEventListener("resize", syncNavHeight);
+  if (typeof ResizeObserver === "function") {
+    const nav = document.querySelector(".top-nav");
+    if (nav) {
+      new ResizeObserver(syncNavHeight).observe(nav);
+    }
+  }
+
   const annotate = initLiveAnnotate();
   initLiveDetectionPage(annotate);
   initDetailsSheet();

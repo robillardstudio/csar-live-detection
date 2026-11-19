@@ -264,6 +264,9 @@ export function initLiveDetectionPage(annotate = null) {
   const importButton = document.getElementById("btn-import-csv");
   const importInput = document.getElementById("import-csv-input");
   const clearButton = document.getElementById("btn-clear-recordings");
+  const reviewMoreButton = document.getElementById("btn-review-more");
+  const reviewMoreMenu = document.getElementById("review-more-menu");
+  const clearMenuItem = reviewMoreMenu?.querySelector('[data-review-more="clear"]');
   const changeModelBtn = document.getElementById("btn-change-model");
   const sessionModelName = document.getElementById("session-model-name");
   const sessionRunStatus = document.getElementById("session-run-status");
@@ -1226,7 +1229,11 @@ export function initLiveDetectionPage(annotate = null) {
     }
     syncLookControls();
 
-    clearButton.disabled = getRecordings().length === 0;
+    const noRecordings = getRecordings().length === 0;
+    clearButton.disabled = noRecordings;
+    if (clearMenuItem) {
+      clearMenuItem.disabled = noRecordings;
+    }
     syncRecordSwitches();
     updateSessionChrome();
   }
@@ -1656,11 +1663,18 @@ export function initLiveDetectionPage(annotate = null) {
     updateMetricsPanel();
   }
   function closeExportMenu() {
+    if (!exportMenu || !exportButton) {
+      return;
+    }
     exportMenu.hidden = true;
     exportButton.setAttribute("aria-expanded", "false");
   }
 
   function openExportMenu() {
+    if (!exportMenu || !exportButton) {
+      return;
+    }
+    closeReviewMoreMenu();
     exportMenu.hidden = false;
     const rect = exportButton.getBoundingClientRect();
     const menuWidth = exportMenu.offsetWidth;
@@ -1668,6 +1682,31 @@ export function initLiveDetectionPage(annotate = null) {
     exportMenu.style.top = `${rect.bottom + 6}px`;
     exportMenu.style.left = `${left}px`;
     exportButton.setAttribute("aria-expanded", "true");
+  }
+
+  function closeReviewMoreMenu() {
+    if (!reviewMoreMenu || !reviewMoreButton) {
+      return;
+    }
+    reviewMoreMenu.hidden = true;
+    reviewMoreButton.setAttribute("aria-expanded", "false");
+  }
+
+  function openReviewMoreMenu() {
+    if (!reviewMoreMenu || !reviewMoreButton) {
+      return;
+    }
+    closeExportMenu();
+    reviewMoreMenu.hidden = false;
+    const rect = reviewMoreButton.getBoundingClientRect();
+    const menuWidth = reviewMoreMenu.offsetWidth || 180;
+    const left = Math.max(
+      8,
+      Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8),
+    );
+    reviewMoreMenu.style.top = `${rect.bottom + 6}px`;
+    reviewMoreMenu.style.left = `${left}px`;
+    reviewMoreButton.setAttribute("aria-expanded", "true");
   }
 
   liveToggle.addEventListener("click", () => {
@@ -1725,6 +1764,23 @@ export function initLiveDetectionPage(annotate = null) {
   }
 
   clearButton.addEventListener("click", clearRecordings);
+  reviewMoreButton?.addEventListener("click", () => {
+    if (reviewMoreMenu?.hidden) {
+      openReviewMoreMenu();
+    } else {
+      closeReviewMoreMenu();
+    }
+  });
+  reviewMoreMenu?.addEventListener("click", (event) => {
+    const item = event.target.closest("[data-review-more]");
+    if (!item || item.disabled) {
+      return;
+    }
+    closeReviewMoreMenu();
+    if (item.dataset.reviewMore === "clear") {
+      clearRecordings();
+    }
+  });
   copyCoordsBtn?.addEventListener("click", async () => {
     if (!gpsFix) {
       return;
@@ -1795,21 +1851,34 @@ export function initLiveDetectionPage(annotate = null) {
     handleExport(exporter);
   });
   document.addEventListener("click", (event) => {
-    if (!exportMenu || exportMenu.hidden) {
-      return;
+    if (
+      exportMenu &&
+      !exportMenu.hidden &&
+      !exportButton?.contains(event.target) &&
+      !exportMenu.contains(event.target)
+    ) {
+      closeExportMenu();
     }
     if (
-      exportButton?.contains(event.target) ||
-      exportMenu.contains(event.target)
+      reviewMoreMenu &&
+      !reviewMoreMenu.hidden &&
+      !reviewMoreButton?.contains(event.target) &&
+      !reviewMoreMenu.contains(event.target)
     ) {
-      return;
+      closeReviewMoreMenu();
     }
-    closeExportMenu();
   });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && exportMenu && !exportMenu.hidden) {
+    if (event.key !== "Escape") {
+      return;
+    }
+    if (exportMenu && !exportMenu.hidden) {
       closeExportMenu();
       exportButton?.focus();
+    }
+    if (reviewMoreMenu && !reviewMoreMenu.hidden) {
+      closeReviewMoreMenu();
+      reviewMoreButton?.focus();
     }
   });
   window.addEventListener("pagehide", () => {

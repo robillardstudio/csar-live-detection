@@ -18,12 +18,11 @@
         <button type="button" class="segmented__option" data-app-mode="review" aria-pressed="false">Review</button>
       </div>
     </div>
-    <nav class="top-nav__actions" aria-label="Controls">
-      <button type="button" id="btn-record" class="btn btn--outline desktop-only" aria-pressed="false" data-show-in="live"><span class="recdot" aria-hidden="true"></span>Start Recording</button>
-      <button type="button" id="btn-gemini-look" class="btn btn--outline desktop-only hidden" data-show-in="live" hidden>Look</button>
-      <button type="button" id="btn-gemini-resume" class="btn btn--outline desktop-only hidden" data-show-in="live" hidden>Resume</button>
-      <button type="button" id="btn-live-toggle" class="btn btn--primary desktop-only" aria-pressed="false" data-show-in="live">Start Live Detection</button>
-      <button type="button" id="btn-clear-recordings" class="btn btn--quiet hidden" data-show-in="review" disabled>Clear recordings</button>
+    <nav class="top-nav__actions desktop-only" aria-label="Controls">
+      <button type="button" id="btn-record" class="btn btn--outline" aria-pressed="false" data-show-in="live"><span class="recdot" aria-hidden="true"></span>Start Recording</button>
+      <button type="button" id="btn-gemini-look" class="btn btn--outline hidden" data-show-in="live" hidden>Look</button>
+      <button type="button" id="btn-gemini-resume" class="btn btn--outline hidden" data-show-in="live" hidden>Resume</button>
+      <button type="button" id="btn-live-toggle" class="btn btn--primary" aria-pressed="false" data-show-in="live">Start Live Detection</button>
     </nav>
   </header>
 
@@ -261,13 +260,20 @@
             <button type="button" id="tab-summary" class="segmented__option" role="tab" data-review-tab="summary" aria-selected="false" aria-controls="session-summary" tabindex="-1">Summary</button>
             <button type="button" id="tab-map" class="segmented__option" role="tab" data-review-tab="map" aria-selected="true" aria-controls="session-map">Map</button>
           </div>
-          <div class="export-menu">
+          <div class="export-menu review-actions">
             <button type="button" id="btn-import-csv" class="btn btn--outline">Import CSV</button>
             <input type="file" id="import-csv-input" accept=".csv,text/csv" hidden>
             <button type="button" id="btn-export" class="btn btn--outline export-menu__trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="export-menu" hidden>Export</button>
             <div id="export-menu" class="export-menu__list" role="menu" hidden>
               <button type="button" class="export-menu__item" role="menuitem" data-export="csv">CSV</button>
               <button type="button" class="export-menu__item" role="menuitem" data-export="json">JSON</button>
+            </div>
+            <button type="button" id="btn-clear-recordings" class="btn btn--quiet review-clear" disabled>Clear recordings</button>
+            <div class="review-more">
+              <button type="button" id="btn-review-more" class="btn btn--outline review-more__trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="review-more-menu" aria-label="More review actions">⋯</button>
+              <div id="review-more-menu" class="export-menu__list review-more__list" role="menu" hidden>
+                <button type="button" class="export-menu__item" role="menuitem" data-review-more="clear" disabled>Clear recordings</button>
+              </div>
             </div>
           </div>
         </div>
