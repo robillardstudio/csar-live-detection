@@ -2,7 +2,6 @@
 // MediaPipe EfficientDet-Lite0 and YOLOv8n-OIV7 are separate engines.
 // live-detection.js reads the resolved device/dtype via getObjectDetectorBackend().
 import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.2.1";
-import { isPhone } from "./utils/device.js";
 import {
   disposeMediaPipeObjectDetector,
   getMediaPipeBackend,
@@ -15,6 +14,13 @@ import {
 } from "./analysis/oiv7-detect.js";
 
 export const MODEL_OPTIONS = [
+  {
+    id: "yolov8n-oiv7",
+    label: "YOLOv8n-OIV7 (detection, 601 classes)",
+    task: "detection",
+    engine: "onnx",
+    enabled: true,
+  },
   { id: "Xenova/yolos-tiny", label: "YOLOS-tiny (detection)", task: "detection", engine: "transformers", enabled: true },
   { id: "Xenova/detr-resnet-50", label: "DETR (detection)", task: "detection", engine: "transformers", enabled: true },
   {
@@ -22,13 +28,6 @@ export const MODEL_OPTIONS = [
     label: "MediaPipe EfficientDet-Lite0 (detection)",
     task: "detection",
     engine: "mediapipe",
-    enabled: true,
-  },
-  {
-    id: "yolov8n-oiv7",
-    label: "YOLOv8n-OIV7 (detection, 601 classes)",
-    task: "detection",
-    engine: "onnx",
     enabled: true,
   },
   {
@@ -42,10 +41,7 @@ export const MODEL_OPTIONS = [
   { id: "llm:scene-description", label: "LLM — scene description (coming soon)", task: "llm", engine: null, enabled: false },
 ];
 
-// Phones start on the lighter classifier; desktop and iPad on YOLOS-tiny.
-let MODEL_ID = isPhone()
-  ? "onnx-community/mobilenetv4_conv_small.e2400_r224_in1k"
-  : "Xenova/yolos-tiny";
+let MODEL_ID = "yolov8n-oiv7";
 const DTYPE = "auto";
 
 export function getModelId() {
